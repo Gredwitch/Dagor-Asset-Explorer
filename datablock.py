@@ -25,7 +25,7 @@ class DataBlock:
 		for i in range(self.getParamsCount()):
 			param = self.getParamById(i)
 
-			result += f"{indent}\t{self.__sharedBlk.sharedNameMap[(param[0] & 0x0FFFFFF) - 1]}: {param[1]} ({hex(param[0])})\n"
+			result += f"{indent}\t{self.getParamNameByFlags(param[0])}: {param[1]} ({hex(param[0])})\n"
 		for blk in self.getChildren():
 			result += blk.debug(indent + "\t")
 		
@@ -82,11 +82,14 @@ class DataBlock:
 		
 
 		params:BinFile = self.__sharedBlk.params
-		data:bytes = self.__sharedBlk.paramsData
+		# data:bytes = self.__sharedBlk.paramsData
 
 		params.seek(self.getOfs() + pId * 8, 0)
 
-		return (readInt(params) & 0x0FFFFFF) - 1
+		return self.__sharedBlk.sharedNameMap[(readInt(params) & 0x0FFFFFF) - 1]
+	
+	def getParamNameByFlags(self, flags:int):
+		return self.__sharedBlk.sharedNameMap[(flags & 0x0FFFFFF) - 1]
 
 	def getParamByName(self, name:str):
 		nameMap = self.__sharedBlk.sharedNameMap
@@ -133,6 +136,7 @@ class DataBlock:
 			val = True
 		else:
 			log.log(f"{self.getName()}: Unknown flags {hex(flags)} val={val} ofs={self.getOfs()}", LOG_WARN)
+			# ...
 			
 
 		return (flags, val)
