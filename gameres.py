@@ -5,7 +5,9 @@ import log
 from enums import *
 from decompression import zstdDecompress
 from datablock import *
-from os import path
+from os import path, getcwd
+from terminable import Exportable, SafeRange
+from struct import pack
 
 class MaterialData: # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
 	def __init__(self):
@@ -255,11 +257,347 @@ class GameResDesc:
 
 		return mats
 
+class DynModel:
+	...
+class RendInst:
+	def __init__(self, name:str, file:BinFile): ...
+		# print("hi", name)
 
-if __name__ == "__main__": ...
+class Skeleton:
+	...
+
+
+class GameResourcePack(Exportable): # may need cleanup
+	class RealResData(Exportable):
+		isValid = False
+
+		classNames = {
+			0x77f8232f:"rendInst", # Renderable Instance
+			0x56f81b6d:"skeleton", # Skeleton
+			0xace50000:"collision", # Collision
+			0x88b7a117:"fx", # Particle effect
+			0xb4b7d9c4:"dynModel", # Dynamic model
+			0xd543e771:"physObj", # Physics object
+			0x855a1be6:"fastPhys", # Fast physics object
+			0x40c586f9:"anim", # Anim 2 Data (a2d)
+			0xa6f87a9b:"char", # character
+		}
+
+		def __repr__(self):
+			return f"<{self.getName()}\t{hex(self.__classId)}\ts={self.getSize()}\to={self.__offset}>"
+
+		def __init__(
+				self, filePath:str, classId:int = None,
+				offset:int = 0, size:int = None, name:str = None):
+			
+			self.setFilePath(filePath)
+			self.__classId = classId
+			self.__offset = offset
+
+			self.setSize(size == None and path.getsize(filePath) or size)
+			self.setName(name == None and path.splitext(path.basename(filePath))[0] or name)
+
+			self.__child = None
+
+			if classId == None:
+				self.__singleFile = True
+				
+				file = open(filePath, "rb")
+				self.__classId = readInt(file)
+				file.close()
+
+				self.setSize(self.getSize() - 4)
+			else:
+				self.__singleFile = False
+
+			self.__bin:BinFile = None
+			self.setupClassName()
+
+			self.isValid = True
+		
+		def getOffset(self):
+			return self.__offset
+
+		def getClassId(self):
+			return self.__classId
+		
+		def getIsSingleFile(self):
+			return self.__singleFile
+		
+		def getClassName(self):
+			return self.__className
+
+		def getIcon(self):
+			if self.__classId == 0x77f8232f:
+				return "res/asset_rendinst.bmp"
+			elif self.__classId == 0x56f81b6d:
+				return "res/asset_skeleton.bmp"
+			elif self.__classId == 0xace50000:
+				return "res/asset_collision.bmp"
+			elif self.__classId == 0x88b7a117:
+				return "res/asset_fx.bmp"
+			elif self.__classId == 0xb4b7d9c4:
+				return "res/asset_dynmodel.bmp"
+			elif self.__classId == 0xd543e771:
+				return "res/asset_physobj.bmp"
+			elif self.__classId == 0x855a1be6:
+				return "res/asset_fastphys.bmp"
+			elif self.__classId == 0x40c586f9:
+				return "res/asset_animTree.bmp"
+			elif self.__classId == 0xa6f87a9b:
+				return "res/asset_character.bmp"
+			else:
+				return "res/unknown.bmp"
+
+		def setBin(self, file:BinFile): # in case our rrd isn't coming from a grp - shouldn't happen tho
+			self.__bin = file
+
+		def getBin(self):
+			if self.__bin == None:
+				file = open(self.getFilePath(), "rb")
+
+				file.seek(self.__offset, 1)
+
+				self.__bin = BinFile(file.read(self.getSize()))
+				# binData = file.read(self.getSize() + (self.__singleFile and 4 or 0))
+
+				file.close()
+
+			return self.__bin
+
+		def getClassObject(self):
+			if self.__child != None:
+				return self.__child
+			else:
+				if self.__classId == 0xb4b7d9c4: # dynModel or rendInst
+					child = DynModel(self.getName(), self.getBin())
+				elif self.__classId == 0x77f8232f:
+					child = RendInst(self.getName(), self.getBin())
+				elif self.__classId == 0x56f81b6d:
+					child = Skeleton(self.getName(), self.getBin())
+				else:
+					log.log(f"Unimplemented class {hex(self.__classId)}",2)
+
+					child = None
+
+				self.__child = child
+
+				return child
+		
+		def getChild(self):
+			return self.getClassObject()
+		
+		def setupClassName(self):
+			if self.__classId in self.classNames:
+				self.__className = self.classNames[self.__classId]
+			else:
+				self.__className = f"Unknown classId '{self.__classId == None and 'None' or hex(self.__classId)}'"
+
+		def getExportable(self):
+			return self.__classId == 0x77f8232f or self.__classId == 0xb4b7d9c4
+
+		def save(self, output:str = getcwd()):
+			binData = pack("L", self.__classId) + self.getBin().read()
+			output = path.normpath(f"{output}\\{self.getName()}.rrd")
+
+			file = open(output,"wb")
+
+			file.write(binData)
+
+			file.close()
+
+			return output
+
+	class RealResEntry: # TODO: parents do not work
+		def __repr__(self):
+			return f"<RealResEntry [{hex(self.__classId)}] #{self.__realResId} p={self.__parentCnt} @ {self.__offset}:{self.__name}>"
+		def __init__(self, grp, idx:int, name:str, classId:int, offset:int, realResId:int, _resv:int):
+			self.__grp:GameResourcePack = grp
+			self.__classId = classId
+			self.__offset = offset
+			self.__realResId = realResId
+			self.__resv = _resv
+			self.__name = name
+
+			self.__parentCnt = 0
+			self.__pOffset = 0
+			self.__parentRes:list[GameResourcePack.RealResEntry] = []
+
+			self.__resData = None
+
+			if (idx != realResId):
+				log.log(f"{self}: inconsistant idx={idx} realResId={realResId}", LOG_ERROR)
+
+			# print(idx, hex(classId), offset, realResId, _resv)
+		
+		def getParentOffset(self):
+			return self.__pOffset
+		
+		def getParentCnt(self):
+			return self.__parentCnt
+		
+		def appendParentRes(self, parent):
+			self.__parentRes.append(parent)
+		
+		def getParentRes(self):
+			return self.__parentRes
+
+		def getRealResData(self):
+			if self.__resData == None:
+				log.log(f"Pulling {self.__name} from {self.__grp.getName()}")
+
+				resCnt = self.__grp.getRealResEntryCnt()
+
+				size = 0
+
+				if self.__realResId + 1 >= resCnt:
+					size = self.__grp.getSize() - self.__offset
+				else:
+					size = self.__grp.getRealResEntry(self.__realResId + 1).__offset - self.__offset
+				
+				self.__resData = GameResourcePack.RealResData(grp.getFilePath(), self.__classId, self.__offset, size, self.__name)
+			
+			return self.__resData
+		
+		def getName(self):
+			return self.__name
+
+		def appendData(self, classId:int, resId:int, resDataId:int, pOffset:int, parentCnt:int, l:int):
+			if resId != resDataId:
+				log.log(f"{self}: inconsistant resId={resId} resDataId={resDataId}", LOG_ERROR)
+			
+			self.__parentCnt = parentCnt
+			self.__pOffset = pOffset
+
+		
+	def __init__(self, filePath:str):
+		self.setFilePath(filePath)
+		self.setName(path.splitext(path.basename(filePath))[0])
+
+
+		self.__realResources = {}
+		self.isValid = False
+
+		self.__readFile__()
+
+		log.log(self)
+
+	def __repr__(self):
+		return f"<{self.getName()}.grp\tnmo={self.__nameMapOffset}\tnmn={self.__nameMapNum}\treo={self.__realResEntriesOffset}\trd2={self.__resData2}\trd2n={self.__resData2Num}>"
+
+	def __readFile__(self):
+		f = open(self.getFilePath(), "rb")
+		file = BinFile(f.read())
+		f.close()
+
+		file.seek(0xC, 1)
+
+		dataSize = readInt(file) + 0x4
+		self.setSize(dataSize + 0xC)
+
+		nameMapOffset = file.tell() + readInt(file) - 0x10
+		nameMapNum = readInt(file)
+
+		self.__nameMapOffset = nameMapOffset
+		self.__nameMapNum = nameMapNum
+
+		file.seek(8, 1)
+
+		realResEntriesOffset = file.tell() + readInt(file) - 0x20
+		realResNum = readInt(file)
+
+		self.__realResEntriesOffset = realResEntriesOffset
+
+		file.seek(8, 1)
+
+		resData2 = file.tell() + readInt(file) - 0x20
+		resData2Num = readInt(file)
+
+		self.__resData2 = resData2
+		self.__resData2Num = resData2Num
+
+		file.seek(8, 1)
+
+		nameMapData = file.read(nameMapOffset - file.tell())
+
+		nameMap = []
+
+		prev = readInt(file) - 0x40
+		
+		for i in SafeRange(self, nameMapNum):
+			next = nameMapNum == i + 1 and nameMapOffset - 0x40 or readInt(file) - 0x40
+			
+			nameMap.append(nameMapData[prev:next].decode("utf-8").rstrip("\x00"),)
+			
+			prev = next
+		
+		log.addLevel()
+
+		realResEntries = tuple(GameResourcePack.RealResEntry(self, i, nameMap[i],
+								readInt(file), # classId
+								readInt(file), # offset
+								readShort(file), # realResId
+								readShort(file)) # _resv
+								for i in SafeRange(self, realResNum))
+		
+		# file.seek(0x10 - file.tell() % 0x10, 1)
+
+
+		for i in SafeRange(self, resData2Num):
+			realResEntries[i].appendData(readInt(file), # classId
+								readShort(file), # resId
+								readShort(file), # realResId
+								readInt(file),
+								readInt(file),
+								readLong(file))
+
+		for resEntry in realResEntries:
+			file.seek(resEntry.getParentOffset(), 0)
+
+			for i in range(resEntry.getParentCnt()):
+				resEntry.appendParentRes(realResEntries[readShort(file)])
+
+		log.subLevel()
+
+		# file.close()
+
+		self.__realResEntries = realResEntries
+
+		self.isValid = True
+
+	
+	def getRealResEntry(self, resId:int):
+		return self.__realResEntries[resId]
+	
+	def getRealResEntryCnt(self):
+		return len(self.__realResEntries)
+	
+	def getRealResource(self, realResId:int):
+		assert realResId >= 0 and realResId <= len(self.__realResEntries)
+
+		return self.__realResEntries[realResId].getRealResData()
+	
+	def getAllRealResources(self):
+		return tuple(self.getRealResource(i) for i in SafeRange(self, len(self.__realResEntries)))
+
+	def getResourceByName(self, name:str):
+		for k, v in enumerate(self.__realResEntries):
+			if v.getName() == name:
+				return self.getRealResource(k)
+		
+		return None
+
+
+if __name__ == "__main__":
 	# sblk = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin").getDataBlock()
 	# sblk = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\dynModelDesc.bin").getDataBlock()
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\pkg_cockpits\\res\\dynModelDesc.bin")
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\patch\\content\\base\\res\\dynModelDesc.bin")
 
 	# print(desc.getModelMaterials("su_17m2_cockpit"))
+
+	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
+	
+	rrd = grp.getResourceByName("chevrolet_150_a")
+	rrd.save()
+	ri:RendInst = rrd.getChild()
