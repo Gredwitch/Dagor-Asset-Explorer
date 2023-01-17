@@ -3,11 +3,13 @@ from fileread import *
 from struct import unpack
 import log
 from enums import *
-from decompression import zstdDecompress
+from decompression import zstdDecompress, CompressedData
 from datablock import *
 from os import path, getcwd
 from terminable import Exportable, SafeRange
 from struct import pack
+from mesh import MatVData
+
 
 class MaterialData: # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
 	def __init__(self):
@@ -260,8 +262,65 @@ class GameResDesc:
 class DynModel:
 	...
 class RendInst:
-	def __init__(self, name:str, file:BinFile): ...
-		# print("hi", name)
+	def __init__(self, name:str, file:BinFile):
+		lodHdrInfo = readInt(file)
+		lodHdrSz = lodHdrInfo & 0xFFFFFF
+
+		riStructSzAdd = 48
+
+		if (lodHdrInfo & 0x1000000) != 0:
+			riStructSzAdd = 184
+		
+		altStructSz = lodHdrSz + riStructSzAdd
+		riStructSz = 160 #RenderableInstanceLodsResource default size. if the hdr info has something in it, then increase the struct sz 
+
+		if altStructSz > 0xA0:
+			riStructSz = altStructSz
+		
+		lodHdrSz = lodHdrInfo
+
+		self.__riStructSz = riStructSz
+		self.__lodHdrSz = lodHdrSz
+
+		texCnt = readInt(file)
+		matCnt = readInt(file)
+
+		if texCnt == matCnt == 0xFFFFFFFF:
+			log.log("Pulling material and texture count from GameResDesc") # TODO
+
+			texCnt = 0
+			matCnt = 0
+		
+		vdataNum = readInt(file)
+		mvdHdrSz = readInt(file)
+
+
+		self.__MVD = MatVData(CompressedData(file).decompressToBin(), name, texCnt, matCnt)
+
+		self.readLodHdr(file.readBlock(lodHdrSz))
+
+		print(readInt(file))
+	
+	def readLodHdr(self, file:BinBlock):
+		data = file.readBlock(readInt(file) - 4)
+
+		lodCnt = readInt(data)
+
+		data.seek(8, 1) # ptr
+
+		bbox = (unpack("fff", data.read(0xC)), unpack("fff", data.read(0xC)))
+		bsphCenter = unpack("fff", data.read(0xC))
+		bsphRad = unpack("f", data.read(4))
+		bound0rad = unpack("f", data.read(4))
+
+		impostorDataOfs = readInt(data)
+		
+		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(4)) # occ table is acutally a float[12]
+		
+		
+
+
+
 
 class Skeleton:
 	...
@@ -411,6 +470,7 @@ class GameResourcePack(Exportable): # may need cleanup
 	class RealResEntry: # TODO: parents do not work
 		def __repr__(self):
 			return f"<RealResEntry [{hex(self.__classId)}] #{self.__realResId} p={self.__parentCnt} @ {self.__offset}:{self.__name}>"
+		
 		def __init__(self, grp, idx:int, name:str, classId:int, offset:int, realResId:int, _resv:int):
 			self.__grp:GameResourcePack = grp
 			self.__classId = classId
@@ -533,6 +593,8 @@ class GameResourcePack(Exportable): # may need cleanup
 		
 		log.addLevel()
 
+		self.__resEntriesOfs = file.tell()
+
 		realResEntries = tuple(GameResourcePack.RealResEntry(self, i, nameMap[i],
 								readInt(file), # classId
 								readInt(file), # offset
@@ -580,12 +642,18 @@ class GameResourcePack(Exportable): # may need cleanup
 	def getAllRealResources(self):
 		return tuple(self.getRealResource(i) for i in SafeRange(self, len(self.__realResEntries)))
 
-	def getResourceByName(self, name:str):
+	def getRealResId(self, name:str):
 		for k, v in enumerate(self.__realResEntries):
 			if v.getName() == name:
-				return self.getRealResource(k)
-		
-		return None
+				return k
+
+
+	def getResourceByName(self, name:str):
+		return self.getRealResource(self.getRealResId(name))
+	
+	def getResEntryOffsets(self, realResId:int):
+		ofs = self.__resEntriesOfs + realResId * 0xC
+		return f"realResDataOfs1={ofs} realResDataOfs2={ofs + realResId * 0x18}"
 
 
 if __name__ == "__main__":
@@ -596,8 +664,12 @@ if __name__ == "__main__":
 
 	# print(desc.getModelMaterials("su_17m2_cockpit"))
 
-	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
+	grp = GameResourcePack("samples\\cars_ri.grp")
 	
-	rrd = grp.getResourceByName("chevrolet_150_a")
-	rrd.save()
+	resId = grp.getRealResId("chevrolet_150_a")
+	rrd = grp.getRealResource(resId)
+	# resEntry = grp.getRealResEntry(resId)
+	# print(resId, grp.getResEntryOffsets(resId), resEntry.getRealResData().getOffset())
+	# rrd.save()
 	ri:RendInst = rrd.getChild()
+	# print(rrd)

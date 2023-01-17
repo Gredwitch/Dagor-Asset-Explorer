@@ -146,10 +146,16 @@ class MaterialData:
 
 
 class MatVData(Exportable): # stores material and vertex data :D	
-	def __init__(self, filePath:str, file:BinFile, texCnt:int = 0, matCnt:int = 0, name:str = None):
-		self.setFilePath(filePath)
+	def __init__(self, file:BinFile, name:str = None, texCnt:int = 0, matCnt:int = 0, filePath:str = None):
+		if filePath: # filepath is used for debugging purposes only when loading an MVD individually - in practice it is never used
+			self.setFilePath(filePath)
+
+			
+			self.setName(path.splitext(path.basename(filePath))[0] if name is None else name)
+		else:
+			self.setName(name)
+		
 		self.setSize(file.getSize())
-		self.setName(path.splitext(path.basename(filePath))[0] if name is None else name)
 
 		self.__texCnt = texCnt
 		self.__matCnt = matCnt
@@ -864,5 +870,5 @@ class MatVData(Exportable): # stores material and vertex data :D
 if __name__ == "__main__":
 	fPath = "samples/germany_105mm_cannon_lefh_18_40.mvd"
 
-	mvd = MatVData(fPath, BinFile(fPath))
+	mvd = MatVData(BinFile(fPath), filePath = fPath)
 	mvd.quickExportVDataToObj(3)

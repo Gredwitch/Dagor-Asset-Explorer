@@ -3,7 +3,7 @@ from os import path, getcwd
 
 
 from fileread import *
-from decompression import CompressedData, zlibDecompress
+from decompression import CompressedData, zlibDecompress, zstdCompress
 # from math import * #acos, degrees
 from terminable import Exportable
 from struct import unpack, pack
@@ -222,7 +222,7 @@ class DagorBinaryLevelData(Exportable):
 				# self.entCnt = tuple(Map.RendInstGenData.PregEntCounter(file, entOfs + i * Map.RendInstGenData.PregEntCounter.structSize)
 				# 					for i in range(65))
 
-				self.entCnt = tuple(Map.RendInstGenData.PregEntCounter(file) for i in range(65))
+				self.entCnt = tuple(DagorBinaryLevelData.RendInstGenData.PregEntCounter(file) for i in range(65))
 				
 				# log.log("entCnt:")
 				# log.addLevel()
@@ -841,7 +841,7 @@ class DagorBinaryLevelData(Exportable):
 
 		log.addLevel()
 
-		self.blockHeaders = tuple(Map.BlockHeader(file, i) for i in range(blocksCnt + 1))
+		self.blockHeaders = tuple(DagorBinaryLevelData.BlockHeader(file, i) for i in range(blocksCnt + 1))
 
 		file.seek(metaSz + 0x10, 0)
 
@@ -866,7 +866,7 @@ class DagorBinaryLevelData(Exportable):
 			log.addLevel()
 			
 			# if name == "SCN":
-			self.processBin(name, dat, ofs)
+			# self.processBin(name, dat, ofs)
 
 			log.subLevel()
 
@@ -973,7 +973,7 @@ if __name__ == "__main__":
 	from pprint import pprint
 
 	# map = Map("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\battle_of_berlin_opera - Copy.bin")
-	# map = Map("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory - Copy.bin")
+	map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory - Copy.bin")
 	# map = Map("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\britain.bin")
 	# map = Map("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\air_afghan.bin")
 	

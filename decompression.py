@@ -45,6 +45,9 @@ class CompressedData:
 				log.log(f"Unknown compression method {hex(self.cMethod)}", log.LOG_ERROR)
 		
 		return data
+	
+	def decompressToBin(self):
+		return BinFile(self.decompress())
 
 
 def zstdDecompress(data:bytes):
