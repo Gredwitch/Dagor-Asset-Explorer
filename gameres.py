@@ -261,6 +261,7 @@ class GameResDesc:
 
 class DynModel:
 	...
+
 class RendInst(Exportable):
 	def __init__(self, name:str, file:BinBlock):
 		self.setName(name)
@@ -297,7 +298,7 @@ class RendInst(Exportable):
 		mvdHdrSz = readInt(file)
 
 
-		self.__matVData = MatVData(CompressedData(file).decompressToBin(), name, texCnt, matCnt)
+		self.setMatVData(MatVData(CompressedData(file).decompressToBin(), name, texCnt, matCnt))
 
 		data = file.readBlock(readInt(file) - 4)
 
@@ -321,57 +322,83 @@ class RendInst(Exportable):
 
 		log.subLevel()
 	
+	def setMatVData(self, mvd:MatVData):
+		self.__mvd = mvd
+	
+	def getMatVData(self):
+		return self.__mvd
+
 	def getObj(self, lodId:int):
-		self.__matVData.computeData()
+		mvd = self.getMatVData()
 
-		vertexData = self.__matVData.getVertexData(self.__matVData.getVDCount() - lodId - 1)
-
-		verts, UVs, faces = vertexData.getVertices(), vertexData.getUVs(), vertexData.getFaces()
-
-		shaderMesh = self.__shaderMesh[lodId].shaderMesh.elems
+		mvd.computeData()
 		
+		vertexDataCnt = mvd.getVDCount()
+		shaderMeshElems = self.__shaderMesh[lodId].shaderMesh.elems
+		vertexDatas:list[list[MatVData.VertexData, int]] = [None for i in range(vertexDataCnt)]
+
+
 		obj = ""
+		objFaces = ""
 
-		log.log(f"Exporting {len(verts)} vertices")
+		vOfs = 0
 
-		for v in verts:
-			obj += f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n"
-		
-		log.log(f"Exporting {len(UVs)} UVs")
+		for k, elem in enumerate(shaderMeshElems):
+			log.log(f"Processing shader mesh {k}")
+			log.addLevel()
 
-		for v in UVs:
-			obj += f"vt {v[0]:.4f} {v[1]:.4f}\n"
+			if k != 0:
+				prev = shaderMeshElems[k - 1]
 
-		log.log(f"Exporting {len(faces)} faces with {len(shaderMesh)} shaderMesh elems")
-		
-		# TODO: make each shader mesh retrieve its vertexData
+				if prev.vData != elem.vData:
+					vOfs += prev.numV
 
-		curShaderMesh = -1
-		nextShaderMesh = -1
-
-		for k, face in enumerate(faces):
-			if k >= nextShaderMesh:
-				curShaderMesh += 1
-
-				shaderMeshElem = shaderMesh[curShaderMesh]
-
-				nextShaderMesh = k + shaderMeshElem.numFace
-
-				obj += f"usemtl {shaderMeshElem.mat}\n" # TODO: retrive material name
-
-			f = ""
-
-			for idx in face:
-				idx += 1
-
-				f += f" {idx}/{idx}"
+			if vertexDatas[elem.vData] == None:
+				vertexDatas[elem.vData] = [mvd.getVertexData(elem.vData), 0, 0]
 			
-			if f == "":
-				continue
+			vertexData = vertexDatas[elem.vData][0]
+			curFace = vertexDatas[elem.vData][1]
 
+			verts, UVs, faces = vertexData.getVertices(), vertexData.getUVs(), vertexData.getFaces()
+
+			objVerts = ""
+			objUV = ""
+
+			for i in range(elem.startV, elem.startV + elem.numV):
+				v = verts[i]
+
+				objVerts += f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n"
+
+				uv = UVs[i]
+
+				objUV += f"vt {uv[0]:.4f} {uv[1]:.4f}\n"
+
+
+			obj += objVerts + objUV
+
+			objFaces += f"usemtl {elem.mat}\n"
+
+			for i in range(curFace, curFace + elem.numFace):
+				face = faces[i]
+
+				f = ""
+
+				for idx in face:
+					idx += 1 + vOfs
+
+					f += f" {idx}/{idx}"
+					
+				if f == "":
+					continue
+				
+				objFaces += f"f{f}\n"
 			
-			obj += f"f{f}\n"
-		
+			vertexDatas[elem.vData][1] += elem.numFace
+			
+			log.subLevel()
+
+		obj += objFaces
+
 		return obj
 	
 	def exportObj(self, lodId:int):
@@ -735,13 +762,26 @@ if __name__ == "__main__":
 
 	grp = GameResourcePack("samples\\cars_ri.grp")
 	
-	# resId = grp.getRealResId("chevrolet_150_a_abandoned_a")
-	resId = grp.getRealResId("chevrolet_150_a")
+	resId = grp.getRealResId("dodge_wf32_abandoned_b")
+	# resId = grp.getRealResId("dodge_wf32")
 	rrd = grp.getRealResource(resId)
-	# resEntry = grp.getRealResEntry(resId)
-	# print(resId, grp.getResEntryOffsets(resId), resEntry.getRealResData().getOffset())
-	# rrd.save()
+	
 	ri:RendInst = rrd.getChild()
 	ri.exportObj(0)
-	# rrd.save()
-	# print(rrd)
+
+	# mvd = ri.getMatVData()
+	# mvd.quickExportVDataToObj(6)
+	# mvd.quickExportVDataToObj(5)
+
+	# for rrd in grp.getAllRealResources():
+	# 	if rrd.getClassName() != "rendInst":
+	# 		continue
+			
+	# 	log.log(f"Processing {rrd.getName()}")
+	# 	log.addLevel()
+
+	# 	ri:RendInst = rrd.getChild()
+		
+	# 	ri.getObj(0)
+
+	# 	log.subLevel()
