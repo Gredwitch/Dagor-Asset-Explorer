@@ -150,7 +150,7 @@ def readEx(bytes:int,file:BufferedReader) -> int: ...
 def readEx(bytes:int,file:BinFile) -> int: ...
 
 
-def readEx(bytes,file, signed = False):
+def readEx(bytes, file, signed = False):
 	return int.from_bytes(file.read(bytes),"little", signed=signed)
 
 

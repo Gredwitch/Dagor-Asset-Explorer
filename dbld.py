@@ -20,30 +20,6 @@ from pprint import pprint
 def formatMagic(magic:bytes):
 	return magic.decode("utf-8").replace("\x00", "")
 
-class ShaderMesh:
-	def __init__(self, file:BinFile, vDataCnt:int):
-		data = file.readBlock(readInt(file))
-
-		self.dptr = readLong(data)
-		self.dcnt = readLong(data)
-
-		self.stageEndElemIdx = tuple(readShort(data) for i in range(vDataCnt + 1))
-		
-		self._deprecatedMaxMatPass = readInt(data)
-		self._resv = readInt(data)
-
-		data.seek(0x14, 1)
-
-		self.vData = readInt(data)
-		self.vdOrderIndex = readInt(data)
-		self.startV = readInt(data)
-		self.numV = readInt(data)
-		self.startI = readInt(data)
-		self.numFace = readInt(data)
-		self.baseVertex = readInt(data)
-	
-	def __repr__(self):
-		return f"<sm seei={self.stageEndElemIdx} dmmp={self._deprecatedMaxMatPass} vData={self.vData} vdOrderIndex={self.vdOrderIndex} startV={self.startV} numV={self.numV} startI={self.startI} numFace={self.numFace} baseVertex={self.baseVertex}>"
 
 class RoHugeHierBitMap2d:
 	def __repr__(self):
@@ -498,7 +474,7 @@ class DagorBinaryLevelData(Exportable):
 			
 			log.log(f"MVD @ +{file.tell()}")
 			
-			self.mvd = MatVData(self.getFilePath(), BinFile(CompressedData(file).decompress()), name = self.getName())
+			self.mvd = MatVData(CompressedData(file).decompressToBin(), self.getName(), filePath = self.getFilePath())
 			
 			ofs = file.tell()
 
@@ -518,7 +494,7 @@ class DagorBinaryLevelData(Exportable):
 				fBlock = BinFile(block.read(readInt(block)))
 
 				try:
-					landShaderMesh = tuple(ShaderMesh(fBlock, vdataCnt) for i in range(2))
+					landShaderMesh = tuple(ShaderMesh(fBlock) for i in range(2))
 				except Exception as e:
 					log.log(e, LOG_ERROR)
 					pass
@@ -865,8 +841,8 @@ class DagorBinaryLevelData(Exportable):
 
 			log.addLevel()
 			
-			# if name == "SCN":
-			# self.processBin(name, dat, ofs)
+			if name == "lmap":
+				self.processBin(name, dat, ofs)
 
 			log.subLevel()
 

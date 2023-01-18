@@ -65,13 +65,13 @@ struct BBox3f {
 };
 
 struct OcclusionData {
-    u32 unknown;
-    
-    padding[4];
-    
-    float unknown1;
-    
-    padding[4];
+	u32 unknown;
+	
+	padding[4];
+	
+	float unknown1;
+	
+	padding[4];
 };
 
 struct ModelData {
@@ -91,26 +91,46 @@ struct ModelData {
 	OcclusionData occ[4];
 };
 
-struct VDataInfo {
-	u32 unknown0;
-	u32 unknown1;
-	u32 unknown2;
-	u32 unknown3;
+struct ShaderMeshElem {
+	u64 ShaderElementPtr;
+	u64 ShaderMaterialPtr;
+	u64 VertexDataPtr;
+	
+	u32 vdOrderIndex;
+	u32 startV;
+	u32 numV;
+	u32 startI;
+	u32 numFace;
+	u32 baseVertex;
 };
 
-struct ShaderMeshData {
-	u32 sz;
-	u32 unknown;
+
+struct ShaderMesh {
+	u32 elemOfs; // actually these are u64 dptr
+	u32 elemCnt;
 	
-	u32 refSz;
+	padding[8]; // u64 dcnt
 	
-	padding[0x50 - 0x8 + 0x4];
+	u16 stageEndElemIdx[8];
+	u32 __deprecatedMaxMatPass;
+	u32 _resv;
 	
-	u32 t;
+	if (elemCnt > 0) {
+	   ShaderMeshElem elem[elemCnt + stageEndElemIdx[2]];
+	}
 };
+
+
+struct InstShaderMeshResource {
+	u32 resSz;
+	u32 _resv;
+	
+	ShaderMesh mesh;
+};
+
 
 Header Hdr @ 0;
 CompressedData mvd @ sizeof(Hdr);
 ModelData modelData @ addressof(mvd) + sizeof(mvd);
-//VDataInfo vdInfo[modelData.vdataCnt] @ addressof(modelData) + sizeof(modelData);
-//ShaderMeshData shaderMesh[1] @ addressof(vdInfo) + sizeof(vdInfo); // modelData.vdataCnt
+InstShaderMeshResource instSmr[modelData.lodCnt] @ addressof(modelData) + sizeof(modelData);
+// u32 t @ addressof(instSmr) + 184 + 8;

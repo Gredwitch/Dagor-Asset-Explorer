@@ -8,7 +8,7 @@ from datablock import *
 from os import path, getcwd
 from terminable import Exportable, SafeRange
 from struct import pack
-from mesh import MatVData
+from mesh import MatVData, InstShaderMeshResource
 
 
 class MaterialData: # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
@@ -261,8 +261,10 @@ class GameResDesc:
 
 class DynModel:
 	...
-class RendInst:
-	def __init__(self, name:str, file:BinFile):
+class RendInst(Exportable):
+	def __init__(self, name:str, file:BinBlock):
+		self.setName(name)
+
 		lodHdrInfo = readInt(file)
 		lodHdrSz = lodHdrInfo & 0xFFFFFF
 
@@ -295,13 +297,8 @@ class RendInst:
 		mvdHdrSz = readInt(file)
 
 
-		self.__MVD = MatVData(CompressedData(file).decompressToBin(), name, texCnt, matCnt)
+		self.__matVData = MatVData(CompressedData(file).decompressToBin(), name, texCnt, matCnt)
 
-		self.readLodHdr(file.readBlock(lodHdrSz))
-
-		print(readInt(file))
-	
-	def readLodHdr(self, file:BinBlock):
 		data = file.readBlock(readInt(file) - 4)
 
 		lodCnt = readInt(data)
@@ -316,9 +313,81 @@ class RendInst:
 		impostorDataOfs = readInt(data)
 		
 		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(4)) # occ table is acutally a float[12]
-		
-		
 
+		log.log(f"Processing {lodCnt} shadermesh resources")
+		log.addLevel()
+
+		self.__shaderMesh = tuple(InstShaderMeshResource(file) for i in range(lodCnt))
+
+		log.subLevel()
+	
+	def getObj(self, lodId:int):
+		self.__matVData.computeData()
+
+		vertexData = self.__matVData.getVertexData(self.__matVData.getVDCount() - lodId - 1)
+
+		verts, UVs, faces = vertexData.getVertices(), vertexData.getUVs(), vertexData.getFaces()
+
+		shaderMesh = self.__shaderMesh[lodId].shaderMesh.elems
+		
+		obj = ""
+
+		log.log(f"Exporting {len(verts)} vertices")
+
+		for v in verts:
+			obj += f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n"
+		
+		log.log(f"Exporting {len(UVs)} UVs")
+
+		for v in UVs:
+			obj += f"vt {v[0]:.4f} {v[1]:.4f}\n"
+
+		log.log(f"Exporting {len(faces)} faces with {len(shaderMesh)} shaderMesh elems")
+		
+		# TODO: make each shader mesh retrieve its vertexData
+
+		curShaderMesh = -1
+		nextShaderMesh = -1
+
+		for k, face in enumerate(faces):
+			if k >= nextShaderMesh:
+				curShaderMesh += 1
+
+				shaderMeshElem = shaderMesh[curShaderMesh]
+
+				nextShaderMesh = k + shaderMeshElem.numFace
+
+				obj += f"usemtl {shaderMeshElem.mat}\n" # TODO: retrive material name
+
+			f = ""
+
+			for idx in face:
+				idx += 1
+
+				f += f" {idx}/{idx}"
+			
+			if f == "":
+				continue
+
+			
+			obj += f"f{f}\n"
+		
+		return obj
+	
+	def exportObj(self, lodId:int):
+		log.log(f"Quick exporting LOD {lodId} as OBJ")
+		log.addLevel()
+
+		fileName = f"{self.getName()}_{lodId}.obj"
+		obj = self.getObj(lodId)
+
+		file = open(fileName, "w")
+		file.write(obj)
+		file.close()
+
+		log.subLevel()
+
+		log.log(f"Wrote {len(obj)} to {fileName}")
 
 
 
@@ -666,10 +735,13 @@ if __name__ == "__main__":
 
 	grp = GameResourcePack("samples\\cars_ri.grp")
 	
+	# resId = grp.getRealResId("chevrolet_150_a_abandoned_a")
 	resId = grp.getRealResId("chevrolet_150_a")
 	rrd = grp.getRealResource(resId)
 	# resEntry = grp.getRealResEntry(resId)
 	# print(resId, grp.getResEntryOffsets(resId), resEntry.getRealResData().getOffset())
 	# rrd.save()
 	ri:RendInst = rrd.getChild()
+	ri.exportObj(0)
+	# rrd.save()
 	# print(rrd)

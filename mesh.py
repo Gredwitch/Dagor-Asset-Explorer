@@ -144,6 +144,54 @@ class MaterialData:
 				# self.par == other.par and
 				self.properties == other.properties)
 
+class ShaderMesh:
+	class Elem:
+		def __repr__(self):
+			return f"<ShaderMesh::RElem e={self.ShaderElementPtr} mat={self.mat} vData={self.vData} vdOrderIndex={self.vdOrderIndex} startV={self.startV} numV={self.numV} startI={self.startI} numFace={self.numFace} baseVertex={self.baseVertex}>"
+		
+		def __init__(self, file:BinFile):
+			self.ShaderElementPtr = readLong(file)
+			self.mat = readLong(file)
+			self.vData = readLong(file)
+
+			self.vdOrderIndex = readInt(file)
+			self.startV = readInt(file)
+			self.numV = readInt(file)
+			self.startI = readInt(file)
+			self.numFace = readInt(file)
+			self.baseVertex = readInt(file)
+
+			log.log(self)
+
+	def __init__(self, file:BinFile):
+		ofs = readInt(file)
+		cnt = readInt(file)
+
+		file.seek(8, 1)
+
+		self.stageEndElemIdx = tuple(readShort(file) for i in range(8))
+		
+		self._deprecatedMaxMatPass = readEx(4, file, True)
+		self._resv = readInt(file)
+
+		assert self._deprecatedMaxMatPass >= 0
+
+		log.log(f"stage={self.stageEndElemIdx} maxMatPass={self._deprecatedMaxMatPass} resv={self._resv} cnt={cnt}")
+		log.addLevel()
+
+		self.elems = tuple(self.Elem(file) for i in range(cnt + self.stageEndElemIdx[2]))
+		
+		log.subLevel()
+
+class InstShaderMeshResource:
+	def __init__(self, file:BinFile):
+		sz = readInt(file)
+		resv = readInt(file)
+
+		assert resv == 0
+
+		self.shaderMesh = ShaderMesh(file.readBlock(sz))
+	
 
 class MatVData(Exportable): # stores material and vertex data :D	
 	def __init__(self, file:BinFile, name:str = None, texCnt:int = 0, matCnt:int = 0, filePath:str = None):
