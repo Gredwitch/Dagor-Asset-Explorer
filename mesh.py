@@ -169,17 +169,32 @@ class ShaderMesh:
 
 		file.seek(8, 1)
 
-		self.stageEndElemIdx = tuple(readShort(file) for i in range(8))
+		self.stageEndElemIdx = list(readShort(file) for i in range(8))
 		
 		self._deprecatedMaxMatPass = readEx(4, file, True)
 		self._resv = readInt(file)
 
-		assert self._deprecatedMaxMatPass >= 0
+		if self._deprecatedMaxMatPass < 0: # ShaderMesh::patchData
+			self._deprecatedMaxMatPass &= 0x7FFFFFFF
+		elif self.stageEndElemIdx[2] != 0:
+			old = self.stageEndElemIdx[2]
+
+			self.stageEndElemIdx[0] = cnt
+			self.stageEndElemIdx[1] = cnt
+			self.stageEndElemIdx[2] = cnt
+			self.stageEndElemIdx[3] = cnt
+
+			cnt += old
+
+			self.stageEndElemIdx[4] = cnt
+			self.stageEndElemIdx[5] = cnt
+			self.stageEndElemIdx[6] = cnt
+			self.stageEndElemIdx[7] = cnt
 
 		log.log(f"stage={self.stageEndElemIdx} maxMatPass={self._deprecatedMaxMatPass} resv={self._resv} cnt={cnt}")
 		log.addLevel()
 
-		self.elems = tuple(self.Elem(file) for i in range(cnt + self.stageEndElemIdx[2]))
+		self.elems = tuple(self.Elem(file) for i in range(cnt))
 		
 		log.subLevel()
 
@@ -741,6 +756,15 @@ class MatVData(Exportable): # stores material and vertex data :D
 						bigUVs = True # work around to bypass line "if not bigUVs"
 				else:
 					log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
+			# elif format == 6:
+			# 	if vStride == 28:
+			# 		for i in SafeRange(self, vCnt):
+			# 			verts.append(self.__unpackVertex__(file))
+
+			# 			file.seek(vStride - 3 * 4, 1)
+			# 	else:
+			# 		log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
+				
 			else:
 				log.log(f"Unimplemented storage format {format}", LOG_ERROR)
 

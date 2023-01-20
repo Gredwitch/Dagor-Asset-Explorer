@@ -8,137 +8,9 @@ from datablock import *
 from os import path, getcwd
 from terminable import Exportable, SafeRange
 from struct import pack
-from mesh import MatVData, InstShaderMeshResource
+from mesh import MatVData, InstShaderMeshResource, ShaderMesh
+from material import MaterialData
 
-
-class MaterialData: # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
-	def __init__(self):
-		self.diffuse = None
-		self.mask = None
-		self.normal = None
-		self.ambientOcclusion = None
-
-		self.two_sided = False
-
-		self.detail = []
-		self.detailNormal = []
-
-		self.name = None
-
-		self.diff = (0, 0, 0, 1)
-		self.amb = (0, 0, 0, 1)
-		self.emis = (0, 0, 0, 1)
-		self.spec = (0, 0, 0, 1)
-
-		self.cls = None
-		self.par = None
-
-		self.properties = {}
-	
-	def __ftm(self, tex:str): # format texture to material
-		tex = tex.split("*")[0]
-		splitted = tex.split("_")
-
-		if len(splitted[-1]) > 2:
-			return tex
-		else:
-			return "_".join(splitted[:-1])
-	
-	def __mn(self, *args): # make name
-		return "_".join(args)
-
-	def __generateName__(self):
-		formattedDetail = None
-
-		if len(self.detail) > 0:
-			formattedDetail = []
-
-			for tex in self.detail:
-				f = self.__ftm(tex)
-
-				if f in formattedDetail or f == self.diffuse:
-					continue
-				
-			formattedDetail.append(f)
-		
-		if len(self.detail) < len(self.detailNormal):
-			if formattedDetail is None:
-				formattedDetail = []
-
-			for tex in self.detailNormal:
-				f = self.__ftm(tex)
-
-				if f in formattedDetail or f == self.diffuse:
-					continue
-				
-				formattedDetail.append(f)
-
-		if self.diffuse is None:
-			if self.mask is None:
-				if formattedDetail is None:
-					return self.cls
-				else:
-					return self.__mn(self.cls, *formattedDetail)
-			else:
-				if formattedDetail is None:
-					return self.cls + "_" + self.__ftm(self.mask)
-				else:
-					return self.__mn(self.cls, self.__ftm(self.mask), *formattedDetail)
-
-		
-		if self.mask is None or self.mask == self.diffuse:
-			if formattedDetail is None:
-				return self.__ftm(self.diffuse)
-			else:
-				return self.__mn(self.diffuse, *formattedDetail)
-		else:
-			if formattedDetail is None:
-				return self.__mn(self.__ftm(self.diffuse), self.__ftm(self.mask))
-			else:
-				return self.__mn(self.__ftm(self.diffuse), self.__ftm(self.mask), *formattedDetail)
-
-	def getTexFileName(self, tex:str):
-		return tex.split("*")[0]
-	
-
-	def addTexSlot(self, slotName:str, tex:str):
-		if slotName == "t0":
-			self.diffuse = tex
-		elif slotName == "t1":
-			self.mask = tex
-		elif slotName == "t2":
-			self.normal = tex
-		elif tex[-4:] == "_ao*":
-			self.ambientOcclusion = tex
-		elif tex[-3] == "_n*":
-			self.detailNormal.append(tex)
-		else:
-			self.detail.append(tex)
-	
-	def getName(self):
-		if self.name is None:
-			self.name = self.__generateName__()
-		
-		return self.name
-	
-	def setName(self, name:str):
-		self.name = name
-	
-	def __repr__(self):
-		return f"<MaterialData {self.getName()}>"
-
-	def __eq__(self, other):
-		return (self.diffuse == other.diffuse and
-				self.normal == other.normal and 
-				self.ambientOcclusion == other.ambientOcclusion and (
-					(self.mask == other.mask) or 
-					(self.mask == self.diffuse and other.mask is None) or 
-					(other.mask == other.diffuse and self.mask is None)) and
-				self.detail == other.detail and 
-				self.detailNormal == other.detailNormal and
-				# self.cls == other.cls and
-				# self.par == other.par and
-				self.properties == other.properties)
 
 class GameResDesc:
 	def __init__(self, filePath:str):
@@ -146,7 +18,12 @@ class GameResDesc:
 		self.__fileName = path.splitext(path.basename(filePath))[0]
 		self.__datablock = None
 
+		log.log(f"Reading GameResDesc {self.__fileName}")
+		log.addLevel()
+
 		self.__readFile__()
+
+		log.subLevel()
 	
 	def __getDecompressed__(self):
 		file = open(self.__filePath, "rb")
@@ -192,14 +69,18 @@ class GameResDesc:
 
 		return tuple(tex.getParamById(i)[1] for i in range(tex.getParamsCount()))
 	
+	def hasName(self, model:str):
+		try:
+			if self.__datablock.getByName(model) != None:
+				return True
+		except:
+			return False
+
 	def getModelMaterials(self, model:str) -> list[str]:
 		tex = self.getModelTextures(model)
 
 		if tex is None:
 			raise Exception
-		
-		# blk = None
-		# mat = None
 
 		blk = self.__datablock.getByName(model)
 		matB = blk.getByName("matR")
@@ -227,7 +108,7 @@ class GameResDesc:
 					mat.addTexSlot(blockName, tex[params])
 
 					log.log(f"{i}:{blockName}:{tex[params]}")
-				else:
+				else: # TODO: handle unknown block types
 					setattr(mat, blockName, params)
 
 					log.log(f"{i}:{blockName}:{params}")
@@ -259,12 +140,37 @@ class GameResDesc:
 
 		return mats
 
-class DynModel:
-	...
+	def getFilePath(self):
+		return self.__filePath
+	
+	def getName(self):
+		return self.__fileName
+
 
 class RendInst(Exportable):
 	def __init__(self, name:str, file:BinBlock):
 		self.setName(name)
+		self.setFile(file)
+
+		log.log(f"Loading {name}")
+		log.addLevel()
+
+		self.computeData()
+
+		log.subLevel()
+
+	
+	def computeData(self):
+		file = self.getFile()
+
+		self.loadHeader(file)
+		self.loadMatVData(file)
+		self.loadModelData(file)
+		self.loadShaderMesh(file)
+
+	def loadHeader(self, file:BinBlock):
+		log.log("Loading header")
+		log.addLevel()
 
 		lodHdrInfo = readInt(file)
 		lodHdrSz = lodHdrInfo & 0xFFFFFF
@@ -291,18 +197,30 @@ class RendInst(Exportable):
 		if texCnt == matCnt == 0xFFFFFFFF:
 			log.log("Pulling material and texture count from GameResDesc") # TODO
 
-			texCnt = 0
-			matCnt = 0
+			self.setTexCnt(0)
+			self.setMatCnt(0)
+
+			self.setMaterials(None)
+		else:
+			raise Exception("Old rendInst version detected: material parsing is not implemented")
 		
 		vdataNum = readInt(file)
 		mvdHdrSz = readInt(file)
 
+		log.subLevel()
+	
+	def loadMatVData(self, file:BinBlock):
+		log.log("Loading MatVData")
+		log.addLevel()
 
-		self.setMatVData(MatVData(CompressedData(file).decompressToBin(), name, texCnt, matCnt))
+		self.setMatVData(MatVData(CompressedData(file).decompressToBin(), self.getName(), self.getTexCnt(), self.getMatCnt()))
 
+		log.subLevel()
+
+	def loadModelData(self, file:BinBlock):
 		data = file.readBlock(readInt(file) - 4)
 
-		lodCnt = readInt(data)
+		self.setLodCnt(readInt(data))
 
 		data.seek(8, 1) # ptr
 
@@ -315,27 +233,30 @@ class RendInst(Exportable):
 		
 		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(4)) # occ table is acutally a float[12]
 
+	def loadShaderMesh(self, file:BinBlock):
+		lodCnt = self.getLodCnt()
+
 		log.log(f"Processing {lodCnt} shadermesh resources")
 		log.addLevel()
 
 		self.__shaderMesh = tuple(InstShaderMeshResource(file) for i in range(lodCnt))
 
 		log.subLevel()
-	
-	def setMatVData(self, mvd:MatVData):
-		self.__mvd = mvd
-	
-	def getMatVData(self):
-		return self.__mvd
+
+
 
 	def getObj(self, lodId:int):
 		mvd = self.getMatVData()
+
+		materials = self.getMaterials()
+
+		assert materials != None
 
 		mvd.computeData()
 		
 		vertexDataCnt = mvd.getVDCount()
 		shaderMeshElems = self.__shaderMesh[lodId].shaderMesh.elems
-		vertexDatas:list[list[MatVData.VertexData, int]] = [None for i in range(vertexDataCnt)]
+		vertexDatas:list[MatVData.VertexData] = [None for i in range(vertexDataCnt)]
 
 
 		obj = ""
@@ -354,10 +275,9 @@ class RendInst(Exportable):
 					vOfs += prev.numV
 
 			if vertexDatas[elem.vData] == None:
-				vertexDatas[elem.vData] = [mvd.getVertexData(elem.vData), 0, 0]
+				vertexDatas[elem.vData] = mvd.getVertexData(elem.vData)
 			
-			vertexData = vertexDatas[elem.vData][0]
-			curFace = vertexDatas[elem.vData][1]
+			vertexData = vertexDatas[elem.vData]
 
 			verts, UVs, faces = vertexData.getVertices(), vertexData.getUVs(), vertexData.getFaces()
 
@@ -376,7 +296,9 @@ class RendInst(Exportable):
 
 			obj += objVerts + objUV
 
-			objFaces += f"usemtl {elem.mat}\n"
+			objFaces += f"usemtl {materials[elem.mat].getName()}\n"
+
+			curFace = elem.startI // 3
 
 			for i in range(curFace, curFace + elem.numFace):
 				face = faces[i]
@@ -392,8 +314,6 @@ class RendInst(Exportable):
 					continue
 				
 				objFaces += f"f{f}\n"
-			
-			vertexDatas[elem.vData][1] += elem.numFace
 			
 			log.subLevel()
 
@@ -416,6 +336,297 @@ class RendInst(Exportable):
 
 		log.log(f"Wrote {len(obj)} to {fileName}")
 
+
+
+	def setFile(self, file:BinBlock):
+		self.__file = file
+	
+	def getFile(self):
+		return self.__file
+	
+	
+	def setLodCnt(self, cnt:int):
+		self.__lodCnt = cnt
+	
+	def getLodCnt(self):
+		return self.__lodCnt
+	
+	def setTexCnt(self, cnt:int):
+		self.__texCnt = cnt
+	
+	def setMatCnt(self, cnt:int):
+		self.__matCnt = cnt
+	
+
+	def getMatCnt(self):
+		return self.__matCnt
+	
+	def getTexCnt(self):
+		return self.__texCnt
+	
+	
+	def setMatVData(self, mvd:MatVData):
+		self.__mvd = mvd
+	
+	def getMatVData(self):
+		return self.__mvd
+
+
+	def setMaterials(self, materials:list[MaterialData]):
+		self.__materials = materials
+	
+	def getMaterials(self):
+		return self.__materials
+
+class DynModel(RendInst):
+	class Lod:
+		class RigidObject:
+			def __init__(self, file:BinBlock):
+				self.shaderMeshPtr = readLong(file)
+				self.sph_c = unpack("fff", file.read(4 * 3))
+				self.sph_r = unpack("f", file.read(4))[0]
+				self.nodeId = readInt(file)
+				self._resv = readInt(file)
+
+		def __init__(self, file:BinBlock, lodIdx:int):
+			log.log(f"Processing LOD {lodIdx}")
+			log.addLevel()
+
+			hdrSz = readInt(file)
+			rigidCnt = readInt(file)
+
+			file.seek(8, 1)
+
+			skinOfs = readInt(file)
+			skinCnt = readInt(file)
+
+			file.seek(8, 1)
+
+			log.log(f"Loading {rigidCnt} rigid objects")
+			log.addLevel()
+
+			self.rigids = tuple(self.RigidObject(file.readBlock(0x20)) for i in range(rigidCnt))
+
+			if skinOfs > 0:
+				file.seek(hdrSz + 8, 1)
+			
+			log.subLevel()
+			
+			log.log(f"Loading {rigidCnt} shader mesh resources")
+			log.addLevel()
+
+			self.shaderMesh = tuple(ShaderMesh(file) for i in range(rigidCnt))
+
+			log.subLevel()
+
+			log.subLevel()
+		
+	
+	def computeData(self):
+		file = self.getFile()
+
+		self.loadHeader(file)
+		self.loadMatVData(file)
+		self.loadModelData(file)
+		self.loadSceneNodes(file.readBlock(readInt(file)))
+		self.loadLods(file)
+		self.loadShaderSkinnedMesh(file)
+
+	def loadModelData(self, file:BinBlock):
+		data = file.readBlock(readInt(file) - 4)
+
+		self.setLodCnt(readInt(data))
+
+		data.seek(8, 1) # ptr
+
+		bbox = (unpack("fff", data.read(0xC)), unpack("fff", data.read(0xC)))
+
+		bpC254 = unpack("ffff", data.read(0x10))
+		self.__bpC255 = unpack("ffff", data.read(0x10))
+		
+		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(4)) # occ table is acutally a float[12]
+
+	def loadSceneNodes(self, file:BinBlock):
+		log.log("Processing scene nodes")
+		log.addLevel()
+
+		indicesOfs = readInt(file)
+		nameCnt = readInt(file)
+
+		file.seek(8, 1)
+
+		skinNodesOfs = readInt(file)
+		skinNodeCnt = readInt(file)
+
+		file.seek(8, 1)
+
+		nameMapData = file.read(indicesOfs - 0x20)
+
+		nameMap = []
+
+		prev = readLong(file) - 0x20
+		
+		for i in SafeRange(self, nameCnt):
+			next = nameCnt == i + 1 and -1 or readLong(file) - 0x20
+			
+			nameMap.append(nameMapData[prev:next].decode("utf-8").rstrip("\x00"),)
+			
+			prev = next
+		
+		self.__nodeNames = nameMap
+		
+		log.log(f"Processed {nameCnt} nodes")
+		
+		self.__skinNodes = {readShort(file):i for i in range(skinNodeCnt)}
+
+		log.log(f"Processed {skinNodeCnt} skin nodes")
+
+		file.seek(4, 1)
+
+		log.subLevel()
+
+	def loadLods(self, file:BinBlock):
+		lodCnt = self.getLodCnt()
+
+		log.log(f"Processing {lodCnt} LODs")
+		log.addLevel()
+		
+		self.__lods = tuple(self.Lod(file, i) for i in range(lodCnt))
+
+		log.subLevel()
+
+	def loadShaderSkinnedMesh(self, mfile:BinBlock):
+		cnt = readInt(mfile)
+
+		log.log(f"Loading {cnt} shader skinned mesh resources")
+		log.addLevel()
+
+		for i in range(cnt):
+			log.log(f"{cnt}:")
+			log.addLevel()
+
+			file = mfile.readBlock(readInt(mfile))
+			ptr = readLong(file)
+
+			texCnt = readInt(file)
+			matCnt = readInt(file)
+
+			unknown = readInt(file)
+			unknown = readInt(file)
+
+			mvd = MatVData(CompressedData(file).decompressToBin(), self.getName())
+
+
+
+			log.subLevel()
+
+		log.subLevel()
+
+
+	def getObj(self, lodId:int):
+		log.log(f"Generating LOD {lodId} OBJ for {self.getName()}")
+		log.addLevel()
+
+		mvd = self.getMatVData()
+		
+		# materials = self.getMaterials()
+
+		# assert materials != None
+
+		mvd.computeData()
+
+		lod = self.__lods[lodId]
+		
+		
+		vertexDataCnt = mvd.getVDCount()
+		lodShaderMesh = lod.shaderMesh
+		vertexDatas:list[list[MatVData.VertexData, int]] = [None for i in range(vertexDataCnt)]
+
+
+		obj = ""
+		objFaces = ""
+		objVerts = ""
+		objUV = ""
+
+		vOfs = 0
+
+		log.log("Processing nodes")
+		log.addLevel()
+
+		for shaderMeshId, shaderMesh in enumerate(lodShaderMesh):
+			name = self.__nodeNames[self.__skinNodes[lod.rigids[shaderMeshId].nodeId]]
+			
+			log.log(f"Processing rigid {name}")
+			log.addLevel()
+
+			objFaces += f"g {name}\n"
+
+			for k, elem in enumerate(shaderMesh.elems):
+				log.log(f"Processing shader mesh {k}")
+				log.addLevel()
+
+				if vertexDatas[elem.vData] == None:
+					vertexData = mvd.getVertexData(elem.vData)
+
+					vertexDatas[elem.vData] = [vertexData, vOfs]
+
+					verts, UVs = vertexData.getVertices(), vertexData.getUVs()
+					vCnt = len(verts)
+
+					for i in range(vCnt):
+						x, y, z = verts[i]
+
+						x *= self.__bpC255[0]
+						y *= self.__bpC255[1]
+						z *= self.__bpC255[2]
+
+						objVerts += f"v {x:.4f} {y:.4f} {z:.4f}\n"
+
+						uv = UVs[i]
+
+						objUV += f"vt {uv[0]:.4f} {uv[1]:.4f}\n"
+					
+					vOfs += vCnt
+				
+				vertexData = vertexDatas[elem.vData][0]
+				indiceOffset = vertexDatas[elem.vData][1]
+
+				faces = vertexData.getFaces()
+
+				objFaces += f"usemtl {elem.mat}\n"
+				# objFaces += f"usemtl {materials[elem.mat].getName()}\n"
+				# print(k)
+
+				vS = elem.startI // 3
+
+				for i in range(vS, vS + elem.numFace):
+					face = faces[i]
+
+					f = ""
+
+					for idx in face:
+						idx += 1 + indiceOffset
+
+						f += f" {idx}/{idx}"
+						
+					if f == "":
+						continue
+					
+					objFaces += f"f{f}\n"
+
+				log.subLevel()
+
+			
+			log.subLevel()
+		
+		log.subLevel()
+		
+		obj += objVerts + objUV + objFaces
+
+		log.subLevel()
+
+		return obj
+	
 
 
 class Skeleton:
@@ -611,7 +822,7 @@ class GameResourcePack(Exportable): # may need cleanup
 				else:
 					size = self.__grp.getRealResEntry(self.__realResId + 1).__offset - self.__offset
 				
-				self.__resData = GameResourcePack.RealResData(grp.getFilePath(), self.__classId, self.__offset, size, self.__name)
+				self.__resData = GameResourcePack.RealResData(self.__grp.getFilePath(), self.__classId, self.__offset, size, self.__name)
 			
 			return self.__resData
 		
@@ -753,21 +964,29 @@ class GameResourcePack(Exportable): # may need cleanup
 
 
 if __name__ == "__main__":
-	# sblk = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin").getDataBlock()
-	# sblk = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\dynModelDesc.bin").getDataBlock()
+	from assetcacher import ASSETCACHER
+
+	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin")
+	# ASSETCACHER.appendGameResDesc(desc)
+
+	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\dynModelDesc.bin")
+	# ASSETCACHER.appendGameResDesc(desc)
+
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\pkg_cockpits\\res\\dynModelDesc.bin")
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\patch\\content\\base\\res\\dynModelDesc.bin")
 
-	# print(desc.getModelMaterials("su_17m2_cockpit"))
-
-	grp = GameResourcePack("samples\\cars_ri.grp")
+	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
 	
-	resId = grp.getRealResId("dodge_wf32_abandoned_b")
+	resId = grp.getRealResId("pzkpfw_IV_ausf_F")
 	# resId = grp.getRealResId("dodge_wf32")
 	rrd = grp.getRealResource(resId)
-	
-	ri:RendInst = rrd.getChild()
+	# print(rrd.getOffset())
+	ri:DynModel = rrd.getChild()
+	# ri.setMaterials(ASSETCACHER.getModelMaterials(ri.getName()))
 	ri.exportObj(0)
+	# rrd.save()
+	# print(ri.getMTL())
 
 	# mvd = ri.getMatVData()
 	# mvd.quickExportVDataToObj(6)
