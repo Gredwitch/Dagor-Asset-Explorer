@@ -73,7 +73,7 @@ class BinFile():
 		file.close()
 	
 
-class BinBlock(BinFile):
+class BinBlock(BinFile): # guess who accidentally reinvented memoryview() :)
 	def __init__(self, parent:BinFile, offset:int, size:int):
 		# self.__parent = parent
 		self.__data = parent.getData()

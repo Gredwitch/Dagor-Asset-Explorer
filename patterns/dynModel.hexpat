@@ -73,24 +73,6 @@ struct RigidObject {
 	
 };
 
-struct TMatrix {
-	float row1[4];
-	float row2[4];
-	float row3[4];
-	float row4[4];
-};
-
-struct ShaderSkinnedMesh {
-	TMatrix tm;
-};
-
-struct ShaderSkinnedMeshResource {
-	u32 sz;
-	u32 _resv;
-	u64 refMatVData;
-	ShaderSkinnedMesh mesh;
-};
-
 struct ShaderMeshElem {
 	u64 ShaderElementPtr;
 	u64 ShaderMaterialPtr;
@@ -163,21 +145,42 @@ struct ModelData {
 	
 	BBox3f bbox;
 	
-	float bpC254[4];
-	float bpC255[4];
+	if (dataSz > 0x28) {
+    	float bpC254[4];
+    	float bpC255[4];
+	}
 	
-	OcclusionData occ[4];
+	OcclusionData occ[lodCnt];
 	
 	DynSceneResNameMapResource names;
 	
 	u16 skinNodes[names.skinNodesCnt];
 	
-	padding[4];
+	padding[4 - (((sizeof(skinNodes) + addressof(skinNodes)) - addressof(names)) - names.resNameMapSz) % 4];
 	
 };
 
 struct ShaderSkinnedMeshResource {
-	
+	u32 cnt;
+    
+	if (cnt > 0) {
+        u32 sz;
+    	
+    	u64 ptr;
+    	
+    	u32 texCnt;
+    	u32 matCnt;
+    	
+    	
+    	u32 unknown;
+    	
+    	u24 cDataSz;
+    	u8 cDatMeth;
+    	
+    	CompressedData cdata;
+    	
+    	u32 t;
+    }
 };
 
 
@@ -185,4 +188,4 @@ Header Hdr @ 0;
 CompressedData mvd @ sizeof(Hdr);
 ModelData modelData @ addressof(mvd) + sizeof(mvd);
 Lod lods[modelData.lodCnt] @ addressof(modelData) + sizeof(modelData);
-ShaderSkinnedMeshResource @ addressof(lods) + sizeof(lods);
+ShaderSkinnedMeshResource ssm @ addressof(lods) + sizeof(lods);

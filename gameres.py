@@ -1,15 +1,15 @@
 
 from fileread import *
-from struct import unpack
+from struct import unpack, pack
 import log
 from enums import *
 from decompression import zstdDecompress, CompressedData
 from datablock import *
 from os import path, getcwd
 from terminable import Exportable, SafeRange
-from struct import pack
 from mesh import MatVData, InstShaderMeshResource, ShaderMesh
 from material import MaterialData
+from misc import vectorTransform
 
 
 class GameResDesc:
@@ -147,10 +147,152 @@ class GameResDesc:
 		return self.__fileName
 
 
+class GeomNodeTree:
+	class Node:
+		# def __iter__(self):
+		# 	return self
+		
+		# def __next__(self):
+		# 	raise StopIteration()
+		
+		def readMatrix4x4(self, file:BinBlock):
+			flat = unpack("f" * 16, file.read(4 * 16))
+
+			m = ( # transpose by hand, faster than a loop
+				(flat[0], flat[4], flat[8], flat[12]),
+				(flat[1], flat[5], flat[9], flat[13]),
+				(flat[2], flat[6], flat[10], flat[14]),
+				(flat[3], flat[7], flat[11], flat[15]),
+			)
+
+			return m
+			# return tuple(zip(*([iter(flat)] * 4)))
+
+			# return tuple(unpack("ffff", file.read(4 * 4)) for i in range(4))
+		
+		def readStringFuzzy(self, file:BinBlock):
+			name = b""
+
+			while file.tell() < file.getSize():
+				b = file.read(1)
+				
+				if b == b"\x00":
+					break
+				
+				name += b
+			
+			return name.decode("ascii")
+
+		def __init__(self, file:BinBlock, main:BinBlock, idx:int):
+			self.tm = self.readMatrix4x4(file)
+			self.wtm = self.readMatrix4x4(file)
+
+			self.refOfs = readInt(file)
+			self.refCnt = readInt(file)
+
+			self.idx = idx
+
+			file.seek(8, 1)
+
+			self.pnt = readInt(file)
+
+			file.seek(4, 1)
+
+			nameOfs = readInt(file)
+
+			ofs = main.tell()
+
+			main.seek(nameOfs + 4, 0)
+
+			self.name = self.readStringFuzzy(main)
+
+			main.seek(ofs, 0)
+
+			self.parent = None
+			self.children = []
+		
+		def __repr__(self):
+			return f"<{self.name}>"
+
+		def __str__(self):
+			result = self.name + ' { \n'
+
+			result += '\ttm {\n'
+			for column in self.tm:
+				result += '\t\t' + ' '.join(map(str, column)) + '\n'
+			result += '\t}\n'
+			
+			result += '\twtm {\n'
+			for column in self.wtm:
+				result += '\t\t' + ' '.join(map(str, column)) + '\n'
+			result += '\t}\n'
+
+			result += '}\n'
+
+			return result
+
+	def __init__(self, file:BinFile):
+		self.__retrieveData__(file)
+	
+	def __retrieveData__(self, bfile:BinFile):
+		
+		file = bfile.readBlock(readInt(bfile) & 0x00_00_FF_FF)
+		
+		nodeCnt = readInt(file) - 1
+
+		# self.__nodes = dict(tuple(tuple((v.name, v) for v in (self.Node(file.readBlock(160), file), ))[0] for i in range(nodeCnt)), )
+		nodes = tuple(self.Node(file.readBlock(160), file, i) for i in range(nodeCnt))
+		
+		
+		self.__buildTree__(nodes)
+
+		self.__nodes = nodes
+		self.__nodesDict = {v.name:v for v in nodes}
+	
+	def getNodeByName(self, name:str):
+		if name in self.__nodesDict:
+			return self.__nodesDict[name]
+		
+		return None
+	
+	def getNode(self, nodeId:int):
+		return self.__nodes[nodeId]
+
+	def getNodes(self):
+		return self.__nodes
+
+	def __buildTree__(self, nodes:dict):
+		for nodeName in nodes:
+			# node:GeomNodeTree.Node = nodes[nodeName]
+			node:GeomNodeTree.Node = nodeName
+
+			childOfs = node.refOfs // 160
+			childCnt = node.refCnt
+
+			if childCnt != 0:
+				for i in range(childCnt):
+					try:
+						child:GeomNodeTree.Node = nodes[childOfs + i]
+					except:
+						break
+
+					child.parent = node
+					node.children.append(child)
+
+	def print_tree(self, root, indent = 0):
+		t = "\t"
+
+		print(f"{t * indent} {root.idx}:{root.name}")
+
+		for child in root.children:
+			self.print_tree(child, indent + 1)
+
 class RendInst(Exportable):
 	def __init__(self, name:str, file:BinBlock):
 		self.setName(name)
 		self.setFile(file)
+
+		self.dataComputed = False
 
 		log.log(f"Loading {name}")
 		log.addLevel()
@@ -161,14 +303,19 @@ class RendInst(Exportable):
 
 	
 	def computeData(self):
+		if self.dataComputed:
+			return
+		
 		file = self.getFile()
 
-		self.loadHeader(file)
-		self.loadMatVData(file)
-		self.loadModelData(file)
-		self.loadShaderMesh(file)
+		self.readHeader(file)
+		self.readMatVData(file)
+		self.readModelData(file)
+		self.readShaderMesh(file)
 
-	def loadHeader(self, file:BinBlock):
+		self.dataComputed = True
+
+	def readHeader(self, file:BinBlock):
 		log.log("Loading header")
 		log.addLevel()
 
@@ -209,7 +356,7 @@ class RendInst(Exportable):
 
 		log.subLevel()
 	
-	def loadMatVData(self, file:BinBlock):
+	def readMatVData(self, file:BinBlock):
 		log.log("Loading MatVData")
 		log.addLevel()
 
@@ -217,7 +364,7 @@ class RendInst(Exportable):
 
 		log.subLevel()
 
-	def loadModelData(self, file:BinBlock):
+	def readModelData(self, file:BinBlock):
 		data = file.readBlock(readInt(file) - 4)
 
 		self.setLodCnt(readInt(data))
@@ -231,9 +378,9 @@ class RendInst(Exportable):
 
 		impostorDataOfs = readInt(data)
 		
-		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(4)) # occ table is acutally a float[12]
+		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(self.getLodCnt())) # occ table is acutally a float[12]
 
-	def loadShaderMesh(self, file:BinBlock):
+	def readShaderMesh(self, file:BinBlock):
 		lodCnt = self.getLodCnt()
 
 		log.log(f"Processing {lodCnt} shadermesh resources")
@@ -248,9 +395,8 @@ class RendInst(Exportable):
 	def getObj(self, lodId:int):
 		mvd = self.getMatVData()
 
-		materials = self.getMaterials()
-
-		assert materials != None
+		if self.getMaterials() is None:
+			log.log("No materials were loaded: material groups will be unnamed", LOG_WARN)
 
 		mvd.computeData()
 		
@@ -296,7 +442,7 @@ class RendInst(Exportable):
 
 			obj += objVerts + objUV
 
-			objFaces += f"usemtl {materials[elem.mat].getName()}\n"
+			objFaces += f"usemtl {self.getMaterialName(elem.mat)}\n"
 
 			curFace = elem.startI // 3
 
@@ -334,7 +480,7 @@ class RendInst(Exportable):
 
 		log.subLevel()
 
-		log.log(f"Wrote {len(obj)} to {fileName}")
+		log.log(f"Wrote {len(obj)} bytes to {fileName}")
 
 
 
@@ -357,7 +503,12 @@ class RendInst(Exportable):
 	def setMatCnt(self, cnt:int):
 		self.__matCnt = cnt
 	
-
+	def getMaterialName(self, mat:int):
+		if self.__materials is None:
+			return mat
+		
+		return self.__materials[mat].getName()
+		
 	def getMatCnt(self):
 		return self.__matCnt
 	
@@ -423,17 +574,26 @@ class DynModel(RendInst):
 		
 	
 	def computeData(self):
+		if self.dataComputed:
+			return
+		
 		file = self.getFile()
 
-		self.loadHeader(file)
-		self.loadMatVData(file)
-		self.loadModelData(file)
-		self.loadSceneNodes(file.readBlock(readInt(file)))
-		self.loadLods(file)
-		self.loadShaderSkinnedMesh(file)
+		self.setGeomNodeTree(None)
 
-	def loadModelData(self, file:BinBlock):
-		data = file.readBlock(readInt(file) - 4)
+		self.readHeader(file)
+		self.readMatVData(file)
+		self.readModelData(file)
+		self.readSceneNodes(file.readBlock(readInt(file)))
+		self.readLods(file)
+		self.readShaderSkinnedMesh(file)
+
+		self.dataComputed = True
+
+	def readModelData(self, file:BinBlock):
+		blockSz = readInt(file)
+
+		data = file.readBlock(blockSz - 4)
 
 		self.setLodCnt(readInt(data))
 
@@ -441,12 +601,22 @@ class DynModel(RendInst):
 
 		bbox = (unpack("fff", data.read(0xC)), unpack("fff", data.read(0xC)))
 
-		bpC254 = unpack("ffff", data.read(0x10))
-		self.__bpC255 = unpack("ffff", data.read(0x10))
-		
-		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(4)) # occ table is acutally a float[12]
+		if blockSz > 0x28:
+			log.log(f"Big modeldata header {hex(blockSz)}: node transforms may be fucked", LOG_WARN)
 
-	def loadSceneNodes(self, file:BinBlock):
+			self.__bpC254 = unpack("ffff", data.read(0x10))
+			self.__bpC255 = unpack("ffff", data.read(0x10))
+
+			self.__noScale = False
+		else:
+			self.__bpC254 = (1.0, 1.0, 1.0, 1.0)
+			self.__bpC255 = (1.0, 1.0, 1.0, 1.0)
+
+			self.__noScale = True
+		
+		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(self.getLodCnt())) # occ table is acutally a float[4 * lodCnt]
+
+	def readSceneNodes(self, file:BinBlock):
 		log.log("Processing scene nodes")
 		log.addLevel()
 
@@ -481,11 +651,11 @@ class DynModel(RendInst):
 
 		log.log(f"Processed {skinNodeCnt} skin nodes")
 
-		file.seek(4, 1)
+		# file.seek(4, 1)
 
 		log.subLevel()
 
-	def loadLods(self, file:BinBlock):
+	def readLods(self, file:BinBlock):
 		lodCnt = self.getLodCnt()
 
 		log.log(f"Processing {lodCnt} LODs")
@@ -495,8 +665,11 @@ class DynModel(RendInst):
 
 		log.subLevel()
 
-	def loadShaderSkinnedMesh(self, mfile:BinBlock):
+	def readShaderSkinnedMesh(self, mfile:BinBlock):
 		cnt = readInt(mfile)
+
+		if cnt == 0:
+			return
 
 		log.log(f"Loading {cnt} shader skinned mesh resources")
 		log.addLevel()
@@ -522,16 +695,26 @@ class DynModel(RendInst):
 
 		log.subLevel()
 
+	def setGeomNodeTree(self, skeleton:GeomNodeTree):
+		self.__skeleton = skeleton
+
+	def getGeomNodeTree(self):
+		return self.__skeleton
 
 	def getObj(self, lodId:int):
+		
 		log.log(f"Generating LOD {lodId} OBJ for {self.getName()}")
 		log.addLevel()
 
 		mvd = self.getMatVData()
 		
-		# materials = self.getMaterials()
+		if self.getMaterials() is None:
+			log.log("No materials were loaded: material groups will be unnamed", LOG_WARN)
+		
+		skeleton = self.getGeomNodeTree()
 
-		# assert materials != None
+		if skeleton is None:
+			log.log("No skeleton was loaded: rigids will not be positionned correctly", LOG_WARN)
 
 		mvd.computeData()
 
@@ -540,7 +723,7 @@ class DynModel(RendInst):
 		
 		vertexDataCnt = mvd.getVDCount()
 		lodShaderMesh = lod.shaderMesh
-		vertexDatas:list[list[MatVData.VertexData, int]] = [None for i in range(vertexDataCnt)]
+		vertexDatas:list[list[MatVData.VertexData, int, int]] = [None for i in range(vertexDataCnt)]
 
 
 		obj = ""
@@ -550,37 +733,76 @@ class DynModel(RendInst):
 
 		vOfs = 0
 
+		vertexDataOrder = []
+
 		log.log("Processing nodes")
 		log.addLevel()
 
+		# rootUndo = inverse_matrix(skeleton.getNodeByName("").wtm)
+
 		for shaderMeshId, shaderMesh in enumerate(lodShaderMesh):
-			name = self.__nodeNames[self.__skinNodes[lod.rigids[shaderMeshId].nodeId]]
+			rigid = lod.rigids[shaderMeshId]
+			nodeId = self.__skinNodes[rigid.nodeId]
+
+			name = self.__nodeNames[nodeId]
 			
 			log.log(f"Processing rigid {name}")
+			# log.log(f"Processing rigid {shaderMeshId=} {lod.rigids[shaderMeshId].nodeId=} {self.__skinNodes[lod.rigids[shaderMeshId].nodeId]=} {self.__skinNodes[shaderMeshId]=} {name}")
 			log.addLevel()
 
 			objFaces += f"g {name}\n"
 
+			node = None
+			
+			if skeleton is not None:
+				node = skeleton.getNodeByName(name)
+
+				if node is None:
+					# tm = [[1, 0, 0, 0],
+					# 	  [0, 1, 0, 0],
+					# 	  [0, 0, 1, 0],
+					# 	  [0, 0, 0, 1]
+					# ]
+					node = skeleton.getNodeByName("")
+
+					log.log("Null node warning", LOG_WARN)
+
+				tm = node.wtm
+
+				# tm = [
+				# 	[tm[0][0], tm[0][1], tm[0][2], tm[0][3],],
+				# 	[tm[1][0], tm[1][1], tm[1][2], tm[1][3],],
+				# 	[tm[2][0], tm[2][1], tm[2][2], tm[2][3],],
+				# 	[tm[3][0], tm[3][1], tm[3][2], tm[3][3],],
+				# ]
+				
+				# tm =[	[1, 0, 0, tm[0][3]],
+				# 		[0, 1, 0, tm[1][3]],
+				# 		[0, 0, 1, tm[2][3]],
+				# 		[0, 0, 0, tm[3][3]]
+				# ]
+					
+			# VirtualDynModelEntity::setup
+
 			for k, elem in enumerate(shaderMesh.elems):
-				log.log(f"Processing shader mesh {k}")
+				# log.log(f"Processing shader mesh {k}")
 				log.addLevel()
 
 				if vertexDatas[elem.vData] == None:
+					vertexDataOrder.append(elem.vData)
+
 					vertexData = mvd.getVertexData(elem.vData)
 
-					vertexDatas[elem.vData] = [vertexData, vOfs]
-
 					verts, UVs = vertexData.getVertices(), vertexData.getUVs()
+
+					vertexDatas[elem.vData] = [vertexData, vOfs, verts]
+
 					vCnt = len(verts)
 
 					for i in range(vCnt):
-						x, y, z = verts[i]
-
-						x *= self.__bpC255[0]
-						y *= self.__bpC255[1]
-						z *= self.__bpC255[2]
-
-						objVerts += f"v {x:.4f} {y:.4f} {z:.4f}\n"
+						verts[i][0] *= self.__bpC255[0]
+						verts[i][1] *= self.__bpC255[1]
+						verts[i][2] *= self.__bpC255[2]
 
 						uv = UVs[i]
 
@@ -593,11 +815,26 @@ class DynModel(RendInst):
 
 				faces = vertexData.getFaces()
 
-				objFaces += f"usemtl {elem.mat}\n"
-				# objFaces += f"usemtl {materials[elem.mat].getName()}\n"
-				# print(k)
+				objFaces += f"usemtl {self.getMaterialName(elem.mat)}\n"
 
 				vS = elem.startI // 3
+				
+				
+				if node is not None:
+					verts = vertexDatas[elem.vData][2]
+				
+					for i in range(elem.startV, elem.startV + elem.numV):
+						vert = verts[i]
+
+						if self.__noScale:
+							x, y, z = vectorTransform(tm, vert)
+						else:
+							x, y, z = vert
+
+						vert[0] = x + tm[0][3]
+						vert[1] = y + tm[1][3]
+						vert[2] = z + tm[2][3]
+
 
 				for i in range(vS, vS + elem.numFace):
 					face = faces[i]
@@ -619,18 +856,96 @@ class DynModel(RendInst):
 			
 			log.subLevel()
 		
-		log.subLevel()
-		
-		obj += objVerts + objUV + objFaces
+		for i in vertexDataOrder:
+			for vert in vertexDatas[i][2]:
+				x, y, z = vert
 
+				objVerts += f"v {-x:.6f} {y:.6f} {z:.6f}\n"
+
+		log.subLevel()
+		# print(self.__bpC254)
+		"""
+		objUV = ""
+		objFaces = ""
+		objVerts = ""
+
+		for k, node in enumerate(skeleton.getNodes()):
+			tm = node.wtm
+
+			vec = [0, 0, 0]
+
+			x, y, z, w = transform_vector(tm,vec)
+
+			# x *= self.__bpC254[0]
+			# y *= self.__bpC254[1]
+			# z *= self.__bpC254[2]
+
+			add = 0.1
+
+			objVerts += f"v {x:.4f} {y:.4f} {z:.4f}\n"
+			objVerts += f"v {x + add:.4f} {y:.4f} {z:.4f}\n"
+			objVerts += f"v {x:.4f} {y + add:.4f} {z:.4f}\n"
+
+			objFaces += f"g {node.name}\n"
+
+			idx = (k * 3) + 1
+
+			f = ""
+
+			for i in range(3):
+				f += f" {idx + i}/{idx + i}"
+
+			objFaces += f"f {f}\n"
+			
+		"""
+		"""
+
+		objUV = ""
+		objFaces = ""
+		objVerts = ""
+
+		for shaderMeshId, shaderMesh in enumerate(lodShaderMesh):
+			rigid = lod.rigids[shaderMeshId]
+			nodeId = self.__skinNodes[rigid.nodeId]
+
+			name = self.__nodeNames[nodeId]
+			
+			# tm = node.wtm
+
+			# vec = [0, 0, 0]
+
+			# x, y, z, w = transform_vector(tm,vec)
+
+			x, y, z = rigid.sph_c
+
+			# x *= self.__bpC254[0]
+			# y *= self.__bpC254[1]
+			# z *= self.__bpC254[2]
+
+			add = 0.1
+
+			objVerts += f"v {x:.4f} {y:.4f} {z:.4f}\n"
+			objVerts += f"v {x + add:.4f} {y:.4f} {z:.4f}\n"
+			objVerts += f"v {x:.4f} {y + add:.4f} {z:.4f}\n"
+
+			objFaces += f"g {name}\n"
+
+			idx = (k * 3) + 1
+
+			f = ""
+
+			for i in range(3):
+				f += f" {idx + i}/{idx + i}"
+
+			objFaces += f"f {f}\n"
+"""
+
+		obj += objVerts + objUV + objFaces
+		
 		log.subLevel()
 
 		return obj
 	
-
-
-class Skeleton:
-	...
 
 
 class GameResourcePack(Exportable): # may need cleanup
@@ -639,7 +954,7 @@ class GameResourcePack(Exportable): # may need cleanup
 
 		classNames = {
 			0x77f8232f:"rendInst", # Renderable Instance
-			0x56f81b6d:"skeleton", # Skeleton
+			0x56f81b6d:"geomNodeTree", # Skeleton
 			0xace50000:"collision", # Collision
 			0x88b7a117:"fx", # Particle effect
 			0xb4b7d9c4:"dynModel", # Dynamic model
@@ -740,7 +1055,8 @@ class GameResourcePack(Exportable): # may need cleanup
 				elif self.__classId == 0x77f8232f:
 					child = RendInst(self.getName(), self.getBin())
 				elif self.__classId == 0x56f81b6d:
-					child = Skeleton(self.getName(), self.getBin())
+					# child = SkeletonLegacy(self.getBin())
+					child = GeomNodeTree(self.getBin())
 				else:
 					log.log(f"Unimplemented class {hex(self.__classId)}",2)
 
@@ -766,11 +1082,13 @@ class GameResourcePack(Exportable): # may need cleanup
 			binData = pack("L", self.__classId) + self.getBin().read()
 			output = path.normpath(f"{output}\\{self.getName()}.rrd")
 
-			file = open(output,"wb")
+			file = open(output, "wb")
 
 			file.write(binData)
 
 			file.close()
+
+			log.log(f"Wrote {len(binData)} bytes to {output}")
 
 			return output
 
@@ -830,8 +1148,8 @@ class GameResourcePack(Exportable): # may need cleanup
 			return self.__name
 
 		def appendData(self, classId:int, resId:int, resDataId:int, pOffset:int, parentCnt:int, l:int):
-			if resId != resDataId:
-				log.log(f"{self}: inconsistant resId={resId} resDataId={resDataId}", LOG_ERROR)
+			# if resId != resDataId:
+			# 	log.log(f"{self}: inconsistant resId={resId} resDataId={resDataId}", LOG_ERROR)
 			
 			self.__parentCnt = parentCnt
 			self.__pOffset = pOffset
@@ -920,11 +1238,16 @@ class GameResourcePack(Exportable): # may need cleanup
 								readInt(file),
 								readLong(file))
 
-		for resEntry in realResEntries:
-			file.seek(resEntry.getParentOffset(), 0)
+		# for resEntry in realResEntries:
+			# file.seek(resEntry.getParentOffset(), 0)
 
-			for i in range(resEntry.getParentCnt()):
-				resEntry.appendParentRes(realResEntries[readShort(file)])
+			# for i in range(resEntry.getParentCnt()):
+			# 	resEntryIdx = readShort(file)
+
+			# 	try:
+			# 		resEntry.appendParentRes(realResEntries[resEntryIdx])
+			# 	except Exception as e: 
+			# 		log.log(f"{e}: {i=} {resEntryIdx=}", LOG_ERROR)
 
 		log.subLevel()
 
@@ -975,16 +1298,35 @@ if __name__ == "__main__":
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\pkg_cockpits\\res\\dynModelDesc.bin")
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\patch\\content\\base\\res\\dynModelDesc.bin")
 
-	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
 	
-	resId = grp.getRealResId("pzkpfw_IV_ausf_F")
+	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\vehicles\\pv_kubelwagen.grp")
+	grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\equipment\\weapons_germany.grp")
+	
+	# grp.getAllRealResources()
+	rrd = grp.getResourceByName("mas_36_with_bayonet_dynmodel")
+
+	# rrd.save()
+	
+	# resId = grp.getRealResId("pzkpfw_IV_ausf_F")
 	# resId = grp.getRealResId("dodge_wf32")
-	rrd = grp.getRealResource(resId)
-	# print(rrd.getOffset())
+	# rrd = grp.getRealResource(resId)
+	
+	
+
+	skeRrdId = grp.getRealResId("mas_36_with_bayonet_skeleton")
+	skeRrd = grp.getRealResource(skeRrdId)
+	
 	ri:DynModel = rrd.getChild()
-	# ri.setMaterials(ASSETCACHER.getModelMaterials(ri.getName()))
+	# # ri.setMaterials(ASSETCACHER.getModelMaterials(ri.getName()))
+	ske:GeomNodeTree = skeRrd.getChild()
+	
+	ri.setGeomNodeTree(ske)
+	
 	ri.exportObj(0)
+
+	# ske.print_tree(ske.getNodeByName(""))
 	# rrd.save()
 	# print(ri.getMTL())
 

@@ -15,6 +15,27 @@ def loadDLL(name:str):
 	else:
 		return cdll.LoadLibrary(dllPath)
 
+
+def vectorTransform(matrix, vector):
+	result = [0, 0, 0]
+
+	for i in range(3):
+		for j in range(3):
+			result[i] += matrix[i][j] * vector[j]
+		
+	return result
+
+def getVertCenter(verts:list[list[float, float, float]], startV:int, numV:int):
+	x, y, z = 0, 0, 0
+
+	for i in range(startV, startV + numV):
+		x += verts[i][0]
+		y += verts[i][0]
+		z += verts[i][0]
+	
+	return (x / numV, y / numV, z / numV)
+
+
 def openFile(window = None, title:str = "", nameFilters:Iterable = None, shouldAccept = lambda x: True, fileMode:int = QFileDialog.ExistingFiles):
 	selectedFolderValid = False
 

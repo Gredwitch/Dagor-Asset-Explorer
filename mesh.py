@@ -594,10 +594,10 @@ class MatVData(Exportable): # stores material and vertex data :D
 			return (uv[0], -uv[1])
 
 		def __unpackVertex__(self, file:BinFile):
-			return unpack("fff", file.read(12))
+			return list(unpack("fff", file.read(12)))
 
 		def __unpackShortVertex__(self, file:BinFile):
-			return (-readSignedShort(file) / 256, readSignedShort(file) / 256, readSignedShort(file) / 256)
+			return [readSignedShort(file) / 32768, readSignedShort(file) / 32768, readSignedShort(file) / 32768]
 			# return (-readSignedShort(file),readSignedShort(file),readSignedShort(file))
 		
 
@@ -704,6 +704,7 @@ class MatVData(Exportable): # stores material and vertex data :D
 				# 		file.seek(stride, 1)
 				# elif vStride == 12:
 				stride = vStride - 10
+				shortVerts = True
 
 				for i in SafeRange(self, vCnt):
 					verts.append(self.__unpackShortVertex__(file))
@@ -717,6 +718,8 @@ class MatVData(Exportable): # stores material and vertex data :D
 					# self.__unimplemented = True
 			elif format == 5:
 				if vStride == 24:
+					shortVerts = True
+					
 					for i in SafeRange(self, vCnt):
 						file.seek(8, 1)
 
@@ -747,6 +750,8 @@ class MatVData(Exportable): # stores material and vertex data :D
 					self.__unimplemented = True
 			elif format == 1:
 				if vStride == 8:
+					shortVerts = True
+
 					for i in SafeRange(self, vCnt):
 						verts.append(self.__unpackShortVertex__(file))
 
@@ -770,6 +775,22 @@ class MatVData(Exportable): # stores material and vertex data :D
 
 				self.__unimplemented = True
 			
+			if shortVerts:
+				log.log("Short vertex format warning !", LOG_WARN)
+				# log.log("Processing short verts")
+
+				# maxVx = max(map(lambda pair: abs(pair[0]), verts))
+				# maxVy = max(map(lambda pair: abs(pair[1]), verts))
+				# maxVz = max(map(lambda pair: abs(pair[2]), verts))
+				# maxV = max(maxVx, maxVy, maxVz)
+				# print(maxV)
+
+				# if maxV == 0:
+				# 	getV = lambda c: 0
+				# else:
+				# 	getV = lambda c: c / maxV
+
+				# verts = tuple([getV(vert[0]), getV(vert[1]), getV(vert[2])] for vert in verts)
 			
 			# if shortVerts: # old
 			# 	log.log("Processing short verts")
@@ -778,7 +799,7 @@ class MatVData(Exportable): # stores material and vertex data :D
 			# 	maxVy = max(map(lambda pair: abs(pair[1]), verts))
 			# 	maxVz = max(map(lambda pair: abs(pair[2]), verts))
 			# 	maxV = max(maxVx,maxVy,maxVz)
-
+			# 	print(maxV)
 			# 	if maxV == 0:
 			# 		getV = lambda c: 0
 			# 	else:
