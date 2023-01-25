@@ -8,7 +8,7 @@ from datablock import *
 from os import path, getcwd
 from terminable import Exportable, SafeRange
 from mesh import MatVData, InstShaderMeshResource, ShaderMesh
-from material import MaterialData
+from material import MaterialData, MaterialTemplateLibrary
 from misc import vectorTransform
 
 ###########################################
@@ -478,8 +478,25 @@ class RendInst(Exportable):
 		log.log(f"Quick exporting LOD {lodId} as OBJ")
 		log.addLevel()
 
-		fileName = f"{self.getName()}_{lodId}.obj"
+		name = f"{self.getName()}_{lodId}"
+
+		materials = self.getMaterials()
+
+		fileName = f"{name}.obj"
 		obj = self.getObj(lodId)
+
+		if materials is not None:
+			log.log("Writing MTL")
+
+			mtl = MaterialTemplateLibrary(materials)
+			
+			file = open(name + ".mtl", "w")
+			file.write(mtl.getMTL())
+			file.close()
+
+			mtl.exportTextures()
+
+			obj = "mtllib " + name + ".mtl\n" + obj
 
 		file = open(fileName, "w")
 		file.write(obj)
@@ -673,6 +690,9 @@ class DynModel(RendInst):
 		log.subLevel()
 
 	def readShaderSkinnedMesh(self, mfile:BinBlock):
+		if mfile.tell() + 4 >= mfile.getSize():
+			return
+		
 		cnt = readInt(mfile)
 
 		if cnt == 0:
@@ -1304,17 +1324,18 @@ if __name__ == "__main__":
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\pkg_cockpits\\res\\dynModelDesc.bin")
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\patch\\content\\base\\res\\dynModelDesc.bin")
 
-	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
+	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\vegetation.grp")
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
 	
 	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\vehicles\\pv_kubelwagen.grp")
 	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\equipment\\weapons_germany.grp")
 	
-	# grp.getAllRealResources()
+	grp.getAllRealResources()
 	# rrd = grp.getResourceByName("mas_36_with_bayonet_dynmodel")
 
 	# rrd.save()
-	
+	"""
 	resId = grp.getRealResId("pzkpfw_IV_ausf_F")
 	# resId = grp.getRealResId("dodge_wf32")
 	rrd = grp.getRealResource(resId)
@@ -1331,7 +1352,7 @@ if __name__ == "__main__":
 	
 	ri.setGeomNodeTree(ske)
 	
-	ri.exportObj(0)
+	ri.exportObj(0)"""
 
 	# ske.print_tree(ske.getNodeByName(""))
 	# rrd.save()
