@@ -11,6 +11,13 @@ from mesh import MatVData, InstShaderMeshResource, ShaderMesh
 from material import MaterialData
 from misc import vectorTransform
 
+###########################################
+# 
+# - fix dynmodel transforms: move all verts to center of rigid
+# 	=> make an ObjectNode class: <name> <verts> <faces> <transform> <list of ShaderMeshElems>
+# 	=> export each object after making the ObjectNode list
+# - add old model support: look into pkg_local/bus_stop.grp
+# 
 
 class GameResDesc:
 	def __init__(self, filePath:str):
@@ -945,10 +952,9 @@ class DynModel(RendInst):
 		log.subLevel()
 
 		return obj
-	
 
 
-class GameResourcePack(Exportable): # may need cleanup
+class GameResourcePack(Exportable): # may need cleanup / TODO: rewrite like DXP2
 	class RealResData(Exportable):
 		isValid = False
 
@@ -1298,24 +1304,25 @@ if __name__ == "__main__":
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\pkg_cockpits\\res\\dynModelDesc.bin")
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\patch\\content\\base\\res\\dynModelDesc.bin")
 
-	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
+	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
 	
 	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\vehicles\\pv_kubelwagen.grp")
-	grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\equipment\\weapons_germany.grp")
+	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\equipment\\weapons_germany.grp")
 	
 	# grp.getAllRealResources()
-	rrd = grp.getResourceByName("mas_36_with_bayonet_dynmodel")
+	# rrd = grp.getResourceByName("mas_36_with_bayonet_dynmodel")
 
 	# rrd.save()
 	
-	# resId = grp.getRealResId("pzkpfw_IV_ausf_F")
+	resId = grp.getRealResId("pzkpfw_IV_ausf_F")
 	# resId = grp.getRealResId("dodge_wf32")
-	# rrd = grp.getRealResource(resId)
+	rrd = grp.getRealResource(resId)
 	
 	
 
-	skeRrdId = grp.getRealResId("mas_36_with_bayonet_skeleton")
+	# skeRrdId = grp.getRealResId("mas_36_with_bayonet_skeleton")
+	skeRrdId = grp.getRealResId(rrd.getName() + "_skeleton")
 	skeRrd = grp.getRealResource(skeRrdId)
 	
 	ri:DynModel = rrd.getChild()

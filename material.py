@@ -3,7 +3,14 @@ import PIL
 from assetcacher import ASSETCACHER
 from fileread import *
 from terminable import Exportable
-from os import path
+from decompression import zstdDecompress, oodleDecompress, zlibDecompress, lzmaDecompress
+from os import path, getcwd
+import log
+from enums import *
+
+from struct import pack_into as packInto
+from struct import pack
+from ctypes import create_string_buffer
 
 class MaterialData: # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
 	def __init__(self):
@@ -207,10 +214,141 @@ class MaterialTemplateLibrary:
 
 class DDSx(Exportable):
 	class Header:
-		...
-	
-	def __init__(self, filePath:str, name:str = None, header:Header = None, file:BinFile = None):
+		def __repr__(self):
+			return f"<DDSxHeader {self.getFormattedData()}>"
+		
+		def getFormattedData(self):
+			return f"{self.d3dformat} {self.w}x{self.h}"
+		
+		def __init__(self, file:BinBlock):
+			self.label = file.read(4)
+
+			self.d3dformat = file.read(4)
+			self.flags = readEx(3, file)
+			self.cMethod = readByte(file)
+			self.w = readShort(file)
+			self.h = readShort(file)
+
+			self.levels = readByte(file)
+			self.hqPartLevels = readByte(file)
+
+			self.depth = readShort(file)
+			self.bitsPerPixel = readShort(file)
+
+			b = readByte(file)
+
+			self.lQmip = b >> 4
+			self.mQmip = b & 0x0F
+
+			b = readByte(file)
+
+			self.dxtShift = b >> 4
+			self.uQmip = b & 0x0F
+
+			self.memSz = readInt(file)
+			self.packedSz = readInt(file)
+
+		def getBin(self):
+			return pack("4s4sIHHBBHHBBII", 	self.label, 
+											self.d3dformat, 
+											self.cMethod * 0x1000000 + self.flags, 
+											self.w, 
+											self.h, 
+											self.levels,
+											self.hqPartLevels,
+											self.depth,
+											self.bitsPerPixel,
+											self.lQmip * 0x10 + self.mQmip,
+											self.dxtShift * 0x10 + self.uQmip,
+											self.memSz,
+											self.packedSz)
+
+	__FLAGS = {
+		"FLG_ADDRU_MASK"          : 0xf,
+		"FLG_ADDRV_MASK"          : 0xf0,
+		"FLG_ARRTEX"              : 0x200_000,
+		"FLG_COMPR_MASK"          : 0xe0_000_000,
+		"FLG_CONTIGUOUS_MIP"      : 0x100,
+		"FLG_CUBTEX"              : 0x800,
+		"FLG_GAMMA_EQ_1"          : 0x8_000,
+		"FLG_GENMIP_BOX"          : 0x2_000,
+		"FLG_GENMIP_KAIZER"       : 0x4_000,
+		"FLG_GLES3_TC_FMT"        : 0x100_000,
+		"FLG_HASBORDER"           : 0x400,
+		"FLG_HOLD_SYSMEM_COPY"    : 0x10_000,
+		"FLG_HQ_PART"             : 0x80_000,
+		"FLG_NEED_PAIRED_BASETEX" : 0x20_000,
+		"FLG_VOLTEX"              : 0x1_000,
+
+		"FLG_REV_MIP_ORDER"       : 0x40_0, # 0
+
+		"FLG_NONPACKED"           : 0x200,
+		"FLG_ZSTD"                : 0x20_000_000,
+		"FLG_7ZIP"                : 0x40_000_000, # LZMA
+		"FLG_OODLE"               : 0x60_000_000,
+		"FLG_ZLIB"                : 0x80_000_000
+	}
+
+	__DXT_FORMATS = (
+		b"DXT1",
+		b"DXT5",
+		b"BC7 ",
+		b"ATI1")
+
+	__DDS_HEADER = (
+		0x44, 0x44, 0x53, 0x20, 0x7C, 0x00, 0x00, 0x00,
+		0x07, 0x10, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+		0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+	)
+
+	__DDS_2_HEADER = (
+		0x44, 0x44, 0x53, 0x20, 0x7C, 0x00, 0x00, 0x00,
+		0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+		0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x08, 0x10, 0x40, 0x00,
+		# 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x62, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00
+	)
+
+	__DX10_FORMATS = (
+		b"BC7 ", 
+		b"BC7 "
+	)
+
+	def __repr__(self):
+		return f"<DDsX {self.getName()}: {self.__header.getFormattedData()}>"
+
+	def __init__(self, filePath:str, name:str = None, header:Header = None, file:bytes = None):
 		self.setFilePath(filePath)
+
+		self.__header:DDSx.Header = None
 
 		if header == None:
 			self.__loadSingleFile__(filePath)
@@ -219,25 +357,296 @@ class DDSx(Exportable):
 	
 	def __loadSingleFile__(self, filePath:str):
 		self.setName(path.splitext(path.basename(filePath))[0])
-	
-	def __loadFromDXP__(self, name:str, header:Header, file:BinFile):
+
+		log.log(f"Loading {self.getFilePath()}")
+		log.addLevel()
+
+		file = open(filePath, "rb")
+
+		self.__header = self.Header(file.read(0x20))
+		self.__cData = file.read(self.__header.packedSz)
+
+		file.close()
+
+		log.subLevel()
+
+	def __loadFromDXP__(self, name:str, header:Header, file:bytes):
 		self.setName(name)
 
+		log.log(f"Loading {name} from DXP")
+		log.addLevel()
+
+		self.__header = header
+		self.__cData = file
+
+		log.subLevel()
+	
+	def __decompress__(self, data:bytes):
+		cMethod = self.__header.cMethod
+
+		log.log(f"Decompressing {self.__header.memSz}b using {cMethod=}")
+
+		if cMethod == 0x20:
+			data = zstdDecompress(data)
+		elif cMethod == 0x60:
+			data = oodleDecompress(data, bufferSize = self.__header.memSz)
+		elif cMethod == 0x80:
+			data = zlibDecompress(data)
+		elif cMethod == 0x40:
+			data = lzmaDecompress(data)
+		
+		return data
+
+	
+	def getMipSize(self, width:int, height:int, dxtVersion:bytes):
+		dxtSize = max(1, (width + 3) // 4) * max(1, (height + 3) // 4)
+
+		if dxtVersion == b"DXT1" or dxtVersion == b"ATI1":
+			return dxtSize * 8
+		elif dxtVersion == b"DXT5" or dxtVersion == b"BC7 ":
+			return dxtSize * 16
+		else:
+			log.log(f"Unknown DXT version {dxtVersion}, using DXT1 scale", LOG_WARN)
+
+			return dxtSize * 8
+	
+	def __getDDS__(self):
+		log.log(f"Converting {self.getName()} to DDS")
+		log.addLevel()
 
 
-class DDSxTexturePack2(Exportable):
+		d3dformat = self.__header.d3dformat
+		w, h = self.__header.w, self.__header.h
+
+		log.log(f"cMethod       =	{hex(self.__header.cMethod)}")
+		log.log(f"D3D Format    =	{d3dformat}")
+		log.log(f"Resolution    =	{w}x{h}")
+
+		data = self.__decompress__(self.__cData)
+
+
+		if self.__header.flags & 0x40000:
+			log.log("Found reversed mip order")
+			
+			pos = 0
+			images = []
+
+
+			for level in range(self.__header.levels - 1, -1, -1):
+				width = w // (2 ** level)
+				height = h // (2 ** level)
+
+				size = self.getMipSize(width, height, d3dformat)
+				images.append(data[pos:pos + size])
+				pos += size
+
+			data = bytearray()
+
+			for image in reversed(images):
+				data.extend(image)
+		
+		
+		if d3dformat in self.__DX10_FORMATS:
+			log.log("Found DX10 texture")
+
+			ddsData = create_string_buffer(0x94)
+
+			packInto('148B', ddsData, 0, *self.__DDS_2_HEADER)
+			packInto('I', ddsData, 0xc, w)
+			packInto('I', ddsData, 0x10, h)
+			packInto('I', ddsData, 0x14, self.__header.memSz)
+			packInto('B', ddsData, 0x1c, self.__header.levels)
+			packInto('4s', ddsData, 0x54, b"DX10")
+		else:
+			ddsData = create_string_buffer(0x80)
+
+			packInto('128B', ddsData, 0, *self.__DDS_HEADER)
+			packInto('I', ddsData, 0xc, w)
+			packInto('I', ddsData, 0x10, h)
+			packInto('I', ddsData, 0x14, self.__header.memSz)
+			packInto('B', ddsData, 0x1c, self.__header.levels)
+			packInto('4s', ddsData, 0x54, d3dformat)
+		
+		data = ddsData.raw + data
+
+		log.log(f"Done: final size = {len(data)}")
+
+		log.subLevel()
+
+		return data
+	
+	def getFileName(self):
+		return self.getName().split('*')[0]
+	
+	def exportDDS(self, output:str = getcwd()):
+		fileName = f"{self.getFileName()}.dds"
+
+		output = path.normpath(f"{output}\\{fileName}")
+
+		binData = self.__getDDS__()
+
+		log.log(f"Saving {fileName}")
+
+		file = open(output, "wb")
+
+		file.write(binData)
+
+		file.close()
+
+		log.log(f"Wrote {len(binData)} bytes to {output}")
+	
+	def save(self, output:str = getcwd()):
+		fileName = f"{self.getFileName()}.ddsx"
+
+		log.log(f"Saving {fileName}")
+
+		output = path.normpath(f"{output}\\{fileName}")
+
+		binData = self.__header.getBin() + self.__cData
+
+		file = open(output, "wb")
+
+		file.write(binData)
+
+		file.close()
+
+		log.log(f"Wrote {len(binData)} bytes to {output}")
+
+
+
+class DDSxTexturePack2(Exportable): # TODO: Add logs
 	def __init__(self, filePath:str):
 		self.setFilePath(filePath)
+		self.setName(path.splitext(path.splitext(path.basename(filePath))[0])[0])
 
+		self.__readFile__()
+	
+	def __readFile__(self):
+		file = open(self.getFilePath(), "rb")
+
+		magic = readInt(file)
+		unknown = readInt(file)
+
+		self.__files:list[DDSx] = [None for _ in range(readInt(file))]
+		filesOfs = readInt(file) + 0x10
+
+		nameMapIndiciesOfs = readInt(file)
+		nameMapIndiciesCnt = readInt(file)
+
+		file.seek(8, 1)
+
+		self.__ddsxHeadersOfs = readInt(file) + 0x10
+		# self.__ddsxHeaders:list[DDSx.Header] = [None for _ in range(readInt(file))]
+		ddsxHeaderCnt = readInt(file)
+
+		file.seek(8, 1)
+
+		self.__ddsxRecordsOfs = readInt(file) + 0x10
+		# self.__ddsxRecords:list = [None for _ in range(readInt(file))]
+		ddsxRecordsCnt = readInt(file)
+
+		file.seek(0x10, 1)
+
+		nameMapData = file.read(nameMapIndiciesOfs - 0x38)
+		nameMap = []
+
+		prev = readLong(file) - 0x38
+		
+		for i in range(nameMapIndiciesCnt):
+			next = nameMapIndiciesCnt == i + 1 and -1 or readLong(file) - 0x38
+			
+			nameMap.append(nameMapData[prev:next].decode("utf-8").rstrip("\x00"),)
+			
+			prev = next
+		
+		self.__nameMap = nameMap
+		
+		file.close()
+	
+	def __readDDSx__(self, file, id:int):
+		name = self.__nameMap[id]
+
+		log.log(f"Pulling {id}:{name} from {self.getName()}.dxp.bin")
+		log.addLevel()
+
+		file.seek(self.__ddsxHeadersOfs + id * 0x20, 0)
+
+		header = DDSx.Header(BinFile(file.read(0x20)))
+
+		ddsx = False
+
+		if header.packedSz == 0:
+			log.log(f"Ignoring null sized DDSx")
+		else:
+			file.seek(self.__ddsxRecordsOfs + id * 0x18 + 0xC, 0)
+			
+			offset = readInt(file)
+
+			file.seek(offset, 0)
+			
+			ddsx = DDSx(self.getFilePath(), name, header, file.read(header.packedSz))
+
+		self.__files[id] = ddsx
+
+		log.subLevel()
+
+		return ddsx
+	
+	def getDDSxById(self, id:int):
+		if self.__files[id] is not None:
+			return self.__files[id]
+		
+		file = open(self.getFilePath(), "rb")
+
+		ddsx = self.__readDDSx__(file, id)
+
+		file.close()
+
+		return ddsx
+	
+	def getDDSxByName(self, name:str):
+		for k, v in enumerate(self.__nameMap):
+			if v == name:
+				if self.__files[k] is not None:
+					return self.__files[id]
+				
+				file = open(self.getFilePath(), "rb")
+
+				ddsx = self.__readDDSx__(k)
+
+				file.close()
+
+				return ddsx
+				
+		return None
+	
+	def getAllDDSx(self):
+		log.log(f"{self.getName()}: pulling all DDSx'")
+		log.addLevel()
+
+		file = open(self.getFilePath(), "rb")
+
+		for i in range(len(self.__files)):
+			self.__readDDSx__(file, i)
+		
+		file.close()
+
+		log.subLevel()
+
+		return self.__files
 
 
 if __name__ == "__main__":
-	from gameres import GameResDesc
+	# from gameres import GameResDesc
 
-	desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin")
+	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin")
 	
 	# materials = desc.getModelMaterials("dodge_wf32_abandoned_b")
-	materials = desc.getModelMaterials("dodge_wf32")
+	# materials = desc.getModelMaterials("dodge_wf32")
 
-	mtl = MaterialTemplateLibrary(materials)
-	print(mtl.getMTL())
+	# mtl = MaterialTemplateLibrary(materials)
+	# print(mtl.getMTL())
+
+	dxp = DDSxTexturePack2("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.dxp.bin")
+	all = dxp.getAllDDSx()
+	all[0].exportDDS()
