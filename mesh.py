@@ -352,6 +352,8 @@ class MatVData(Exportable): # stores material and vertex data :D
 
 		log.subLevel()
 
+	def getMaterials(self):
+		return self.__materials
 
 	#-------------------------------------------------
 	#
@@ -961,7 +963,9 @@ class MatVData(Exportable): # stores material and vertex data :D
 
 
 if __name__ == "__main__":
-	fPath = "samples/germany_105mm_cannon_lefh_18_40.mvd"
+	from decompression import CompressedData
+	file = BinFile("pilot_china1.rrd")
+	file.seek(1512, 0)
 
-	mvd = MatVData(BinFile(fPath), filePath = fPath)
-	mvd.quickExportVDataToObj(3)
+	mvd = MatVData(CompressedData(file).decompressToBin(), filePath = "pilot_china1.rrd")
+	mvd.quickExportVDataToObj(1)

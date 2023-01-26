@@ -21,16 +21,25 @@ if oodle3 == None:
 
 
 class CompressedData:
-	def __init__(self, file:BinFile):
-		self.cSz = readEx(3, file)
-		self.cMethod = readByte(file)
-		self.cData = file.read(self.cSz)
+	def __init__(self, file:BinFile, cMethod:int = None):
+		if cMethod != None:
+			self.cSz = len(file)
+			self.cMethod = cMethod
+			self.cData = file
+		else:
+			self.cSz = readEx(3, file)
+			self.cMethod = readByte(file)
+			self.cData = file.read(self.cSz)
 	
 	def decompress(self, outName:str = None):
 		data = None
 
 		if self.cMethod == 0x40:
 			data = zstdDecompress(self.cData)
+		elif self.cMethod == 0x60:
+			data = zlibDecompress(self.cData)
+		elif self.cMethod == 0x20:
+			data = lzmaDecompress(self.cData)
 		elif self.cMethod == 0x80:
 			data = oodleDecompress(self.cData)
 		

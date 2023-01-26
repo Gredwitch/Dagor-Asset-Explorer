@@ -88,7 +88,14 @@ struct ModelData {
 	
 	u32 impostorDataOfs;
 	
-	OcclusionData occ[4];
+	OcclusionData occ[lodCnt];
+	
+	if (impostorDataOfs > 0) {
+	   u64 impostorShaderMeshOfs;
+	   u64 impostorSz;
+	   
+	   char imposterData[impostorSz - (impostorDataOfs + dataSz) + 0x30];
+	}
 };
 
 struct ShaderMeshElem {
@@ -128,9 +135,14 @@ struct InstShaderMeshResource {
 	ShaderMesh mesh;
 };
 
-
 Header Hdr @ 0;
 CompressedData mvd @ sizeof(Hdr);
 ModelData modelData @ addressof(mvd) + sizeof(mvd);
-InstShaderMeshResource instSmr[modelData.lodCnt] @ addressof(modelData) + sizeof(modelData);
-// u32 t @ addressof(instSmr) + 184 + 8;
+
+if (modelData.impostorDataOfs > 0) {
+    if (modelData.lodCnt > 1) {
+        InstShaderMeshResource instSmr[modelData.lodCnt - 1] @ addressof(modelData) + sizeof(modelData);
+    }
+} else {
+    InstShaderMeshResource instSmr[modelData.lodCnt] @ addressof(modelData) + sizeof(modelData);
+}

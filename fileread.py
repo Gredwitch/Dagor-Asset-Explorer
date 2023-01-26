@@ -105,6 +105,9 @@ class BinBlock(BinFile): # guess who accidentally reinvented memoryview() :)
 
 			return self.__data[self.__absOffset + oldOffset:self.__absOffset + self.__offset]
 	
+	def readRest(self):
+		return self.read(self.getSize() - self.tell())
+
 	def tell(self):
 		return self.__offset
 	

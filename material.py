@@ -5,6 +5,7 @@ from fileread import *
 from terminable import Exportable
 from decompression import zstdDecompress, oodleDecompress, zlibDecompress, lzmaDecompress
 from os import path, getcwd, mkdir
+from mesh import MatVData
 import log
 from enums import *
 
@@ -160,7 +161,7 @@ class DDSx(Exportable):
 	def __loadSingleFile__(self, filePath:str):
 		fileName = path.splitext(path.basename(filePath))[0]
 		self.setFileName(fileName)
-		self.setName(fileName.split('*')[0])
+		self.setName(fileName.split("*")[0].split("$")[0])
 
 		log.log(f"Loading {self.getFilePath()}")
 		log.addLevel()
@@ -603,14 +604,17 @@ class MaterialTemplateLibrary:
 			if "opacity" in matParams:
 				self.setParam("d", matParams["opacity"])
 
-			self.setParam("map_Kd", "textures/" + material.diffuse[:-1] + ".dds")
-			self.setParam("map_bump", "textures/" + material.normal[:-1] + ".dds")
+			if material.diffuse is not None:
+				self.setParam("map_Kd", "textures/" + material.diffuse[:-1] + ".dds")
+			
+			if material.normal is not None:
+				self.setParam("map_bump", "textures/" + material.normal[:-1] + ".dds")
 
 			if len(material.detail) > 0:
 				self.setParam("decal ", material.getName() + "_detail")
 			
 
-			print(f"{material}: {material.cls} - {matParams}")
+			log.log(f"{material}: {material.cls} - {matParams}")
 		
 		def setParam(self, name, value):
 			if value == None:
@@ -701,10 +705,50 @@ class MaterialTemplateLibrary:
 
 			mat.exportTextures()
 
-			log.addLevel()
+			log.subLevel()
 		
 		log.subLevel()
+
+def computeMaterialNames(mats:list[MaterialData]):
+	log.log("Computing material names")
+	log.addLevel()
 	
+	for k, mat in enumerate(mats):
+		log.log(f"Materials #{k}: {mat.getName()}")
+
+		cnt = 1
+
+		for mat2 in mats:
+			if mat is mat2:
+				continue
+			
+			if mat.getName() == mat2.getName():
+				if mat == mat2:
+					continue
+				else:
+					mat2.setName(mat2.getName() + f"_{cnt}")
+					cnt += 1
+
+	log.subLevel()
+
+def generateMaterialData(textures:list[str], mvdMats:list[MatVData.Material]):
+	materials:list[MaterialData] = []
+
+	for k, v in enumerate(mvdMats):
+		mat = MaterialData()
+
+		mat.cls = v.shaderClass
+		mat.par = ""
+		
+		for texId, texKey in enumerate(v.textures):
+			if texKey == 0xFFFFFFFF:
+				continue
+			
+			mat.addTexSlot(f"t{texId}", textures[texKey])
+
+		materials.append(mat)
+	
+	return materials
 
 if __name__ == "__main__":
 	from assetcacher import ASSETCACHER

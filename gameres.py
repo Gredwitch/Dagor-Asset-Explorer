@@ -8,7 +8,7 @@ from datablock import *
 from os import path, getcwd
 from terminable import Exportable, SafeRange
 from mesh import MatVData, InstShaderMeshResource, ShaderMesh
-from material import MaterialData, MaterialTemplateLibrary
+from material import MaterialData, MaterialTemplateLibrary,  computeMaterialNames, generateMaterialData
 from misc import vectorTransform
 
 ###########################################
@@ -16,7 +16,13 @@ from misc import vectorTransform
 # - fix dynmodel transforms: move all verts to center of rigid
 # 	=> make an ObjectNode class: <name> <verts> <faces> <transform> <list of ShaderMeshElems>
 # 	=> export each object after making the ObjectNode list
-# - add old model support: look into pkg_local/bus_stop.grp
+#
+# - look into special cases:
+#   => fucked faces: peugeot_402 from cars_ri.grp
+#   => fucked skeleton transforms: enlisted weapons (stg44)
+#
+# - add shaderskinnedmesh parsing (pilot_china)
+# - impostor data parsing?
 # 
 
 class GameResDesc:
@@ -124,26 +130,7 @@ class GameResDesc:
 
 			mats.append(mat)
 
-		log.log("Computing material names")
-		log.addLevel()
-
-		for k, mat in enumerate(mats):
-			log.log(f"Materials #{k}: {mat.getName()}")
-
-			cnt = 1
-
-			for mat2 in mats:
-				if mat is mat2:
-					continue
-				
-				if mat.getName() == mat2.getName():
-					if mat == mat2:
-						continue
-					else:
-						mat2.setName(mat2.getName() + f"_{cnt}")
-						cnt += 1
-
-		log.subLevel()
+		computeMaterialNames(mats)
 
 		return mats
 
@@ -300,6 +287,8 @@ class RendInst(Exportable):
 		self.setFile(file)
 
 		self.dataComputed = False
+		self.__textures = None
+		self.__materials = None
 
 		log.log(f"Loading {name}")
 		log.addLevel()
@@ -347,6 +336,9 @@ class RendInst(Exportable):
 
 		texCnt = readInt(file)
 		matCnt = readInt(file)
+		
+		vdataNum = readInt(file)
+		mvdHdrSz = readInt(file)
 
 		if texCnt == matCnt == 0xFFFFFFFF:
 			log.log("Pulling material and texture count from GameResDesc") # TODO
@@ -356,13 +348,43 @@ class RendInst(Exportable):
 
 			self.setMaterials(None)
 		else:
-			raise Exception("Old rendInst version detected: material parsing is not implemented")
-		
-		vdataNum = readInt(file)
-		mvdHdrSz = readInt(file)
+			self.setTexCnt(texCnt)
+			self.setMatCnt(matCnt)
+
+			self.readTextures(file)
 
 		log.subLevel()
 	
+	def readTextures(self, file:BinBlock):
+		texMapSz = readInt(file)
+		texIndicesOfs = readInt(file)
+		texCnt = readInt(file)
+
+		file.seek(8, 1)
+
+		nameMapData = file.read(texIndicesOfs - 0x10)
+		nameMap = []
+
+		prev = readInt(file) - 0x10
+		
+		for i in range(texCnt):
+			next = texCnt == i + 1 and -1 or readInt(file) - 0x10
+			
+			nameMap.append(nameMapData[prev:next].decode("utf-8").rstrip("\x00"),)
+			
+			prev = next
+		
+		self.setTextures(nameMap)
+
+		print(nameMap)
+
+	def setTextures(self, textures:list[str]):
+		self.__textures = textures
+	
+	def getTextures(self):
+		return self.__textures
+
+
 	def readMatVData(self, file:BinBlock):
 		log.log("Loading MatVData")
 		log.addLevel()
@@ -372,6 +394,8 @@ class RendInst(Exportable):
 		log.subLevel()
 
 	def readModelData(self, file:BinBlock):
+		ofs = file.tell()
+
 		data = file.readBlock(readInt(file) - 4)
 
 		self.setLodCnt(readInt(data))
@@ -387,6 +411,22 @@ class RendInst(Exportable):
 		
 		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(self.getLodCnt())) # occ table is acutally a float[12]
 
+		if impostorDataOfs > 0:
+			file.seek(ofs + impostorDataOfs, 0)
+
+			impostorShaderMeshOfs = readLong(file)
+			impostorSz = readLong(file)
+
+			self.readImposorData(file.readBlock(impostorSz - (file.tell() - ofs)))
+	
+	def readImposorData(self, file:BinBlock):
+		# cMethod = readLong(file)
+
+		# impostor = CompressedData(file.readRest(), 0x60).decompressToBin()
+		# impostor.quickSave("impostor.imp")
+
+		...
+
 	def readShaderMesh(self, file:BinBlock):
 		lodCnt = self.getLodCnt()
 
@@ -397,14 +437,26 @@ class RendInst(Exportable):
 
 		log.subLevel()
 
+	def generateMaterials(self):
+		if self.getMaterials() is not None or self.__textures is None:
+			return
+		
+		mvd = self.getMatVData()
+		mvd.computeData()
+
+		materials = generateMaterialData(self.getTextures(), mvd.getMaterials())
+		computeMaterialNames(materials)
+
+		self.setMaterials(materials)
 
 
 	def getObj(self, lodId:int):
-		mvd = self.getMatVData()
+		self.generateMaterials()
 
-		if self.getMaterials() is None:
+		if self.getMaterials() is None and self.__textures is None:
 			log.log("No materials were loaded: material groups will be unnamed", LOG_WARN)
 
+		mvd = self.getMatVData()
 		mvd.computeData()
 		
 		vertexDataCnt = mvd.getVDCount()
@@ -479,7 +531,9 @@ class RendInst(Exportable):
 		log.addLevel()
 
 		name = f"{self.getName()}_{lodId}"
-
+		
+		self.generateMaterials()
+		
 		materials = self.getMaterials()
 
 		fileName = f"{name}.obj"
@@ -487,6 +541,7 @@ class RendInst(Exportable):
 
 		if materials is not None:
 			log.log("Writing MTL")
+			log.addLevel()
 
 			mtl = MaterialTemplateLibrary(materials)
 			
@@ -495,6 +550,8 @@ class RendInst(Exportable):
 			file.close()
 
 			mtl.exportTextures()
+
+			log.subLevel()
 
 			obj = "mtllib " + name + ".mtl\n" + obj
 
@@ -1325,34 +1382,38 @@ if __name__ == "__main__":
 	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\patch\\content\\base\\res\\dynModelDesc.bin")
 
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
-	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\vegetation.grp")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\vegetation.grp")
+	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\pkg_local\\res\\bus_stop.grp")
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\pilots.grp")
 	
 	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\vehicles\\pv_kubelwagen.grp")
 	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\equipment\\weapons_germany.grp")
 	
-	grp.getAllRealResources()
-	# rrd = grp.getResourceByName("mas_36_with_bayonet_dynmodel")
-
-	# rrd.save()
-	"""
-	resId = grp.getRealResId("pzkpfw_IV_ausf_F")
-	# resId = grp.getRealResId("dodge_wf32")
-	rrd = grp.getRealResource(resId)
+	# grp.getAllRealResources()
+	rrd = grp.getResourceByName("user_example_bus_stop_a")
+	rrd.save()
+	ri:DynModel = rrd.getChild()
+	ri.exportObj(0)
 	
+	# resId = grp.getRealResId("pilot_china1")
+	# resId = grp.getRealResId("pzkpfw_IV_ausf_F")
+	# resId = grp.getRealResId("dodge_wf32")
+	# rrd = grp.getRealResource(resId)
+	# rrd.save()
 	
 
 	# skeRrdId = grp.getRealResId("mas_36_with_bayonet_skeleton")
-	skeRrdId = grp.getRealResId(rrd.getName() + "_skeleton")
-	skeRrd = grp.getRealResource(skeRrdId)
+	# skeRrdId = grp.getRealResId(rrd.getName() + "_skeleton")
+	# skeRrd = grp.getRealResource(skeRrdId)
 	
-	ri:DynModel = rrd.getChild()
+	# ri:DynModel = rrd.getChild()
 	# # ri.setMaterials(ASSETCACHER.getModelMaterials(ri.getName()))
-	ske:GeomNodeTree = skeRrd.getChild()
+	# ske:GeomNodeTree = skeRrd.getChild()
 	
-	ri.setGeomNodeTree(ske)
+	# ri.setGeomNodeTree(ske)
 	
-	ri.exportObj(0)"""
+	# ri.exportObj(0)
 
 	# ske.print_tree(ske.getNodeByName(""))
 	# rrd.save()
