@@ -3,8 +3,20 @@
 #include <std/io.pat>
 #include <type/leb128.pat>
 #include <type/dblk.pat>
+#include <type/dagor_shared.pat>
+#include <type/shadermesh.pat>
+#include <type/dxp.pat>
+
+#include <std/io.pat>
 
 using leb128 = be type::LEB128;
+
+/////////////////////////////////////////////
+//
+// HEADER
+//
+
+
 
 struct EditorVersion {
 	u32 magic;
@@ -28,106 +40,64 @@ struct Header {
 
 	u32 metaCnt;
 	MetaData meta[metaCnt + 1];
-    padding[(metaSz - (metaCnt + 1) * 24) - sizeof(eVer) - 4];
+	padding[(metaSz - (metaCnt + 1) * 24) - sizeof(eVer) - 4];
+};
+
+
+
+/////////////////////////////////////////////
+//
+// LMAP
+//
+
+struct LandShaderMesh {
+    u32 blockSz;
+	ShaderMesh mesh;
+};
+
+
+
+struct CellData {
+    u32 sz;
+    u32 blockSz;
     
-    u32 nameMapSz;
-    u32 nameMapMagic;
+    LandShaderMesh land[2];
+    LandShaderMesh decal;
+    LandShaderMesh combined;
+    
+    if (sz - sizeof(this) + 4 > 0) {
+        LandShaderMesh patches;
+    }
 };
 
-struct NameMapIndex {
-	u32 start;
-	padding[4];
-};
+u32 CELLCNT;
 
-struct FastNameMap {
-	u32 sz;
-	u32 cnt;
-	
-	padding[8];
-	
-	char list[sz - 24];
-	
-	padding[8];
-
-	NameMapIndex indices[cnt];
-};
-struct TexName {
-	u32 sz;
-	char string[sz];
-	
-	if (sz % 4 == 0) {
-		padding[0];
-	} else {
-		padding[4 - sz % 4];
-	}
-	
-};
-
-struct DxP2 {
-	u32 sz;
-	u32 magic;
-	u32 unknown;
-	u32 texSz;
+struct LandMesh {
 	u32 texCnt;
-	TexName texNames[texCnt];
-	padding[(sz - 0x10) - sizeof(texNames)];
-	u32 dataSize;
-	padding[dataSize];
-};
+	u32 matCnt;
+	u32 vdataCnt;
+	u32 mvdHdrSz;
 
-struct LandTextures {
-	u32 unknown;
-	u32 magic;
-	u32 sz;
-	u32 magic2;
-	u32 magic3;
-	u32 count;
+	u32 texMapSz;
+	u32 texIndicesOfs;
+	u32 texIndiciesCnt;
 	
-	padding[0x40];
-	
-	u32 texSz2;
-	u32 texCnt2;
 	padding[8];
-	char texNames2[texSz2 - 0x10];
-	u32 texIndices2[texCnt2];
-};
-
-
-struct CompressedData {
-	u24 sz;
-	u8 compressionMethod;
-	padding[sz + 4];
-};
-
-struct UnknownStruct {
-	u32 sz;
-	padding[sz];
-};
-
-struct ListElements {
-	u32 type;
-
-	if (type == 0xC6000000) {
-		u32 value;
-	} else if (type == 0x40518A11) {
-		u32 value;
-	} else if (type == 0xC5F00000) {
-		u32 value;
-	} else {
-		u32 value;
-	}
-};
-
-struct UnknownList {
-	u32 sz;
-	ListElements listE[sz / 8];
-};
-
-struct StringBlock {
-	u16 unknown2;
-	leb128 blkSz;
-	char data[blkSz];
-	padding[1];
+	
+	padding[texIndicesOfs - 0x10];
+	
+	u32 texMapIndicies[texIndiciesCnt];
+	
+	CompressedData cData;
+	
+	u32 shaderMeshSz;
+	
+	CellData cells[CELLCNT];
+	
+	u32 cellBoundingsSz;
+	
+	BBox3f cellBoundings[CELLCNT];
+	float cellBoundingsRadius[CELLCNT];
 };
 
 struct DecompressedBlock {
@@ -136,7 +106,20 @@ struct DecompressedBlock {
     padding[blockSz - 4];
 };
 
-u32 pow = 1024;
+struct unknownStruct {
+    s16 u1;
+    s16 u2;
+};
+
+struct DDSxHolder {
+	u24 unknown;
+	s32 unknownVal;
+	
+	u32 sz1;
+	u32 sz2;
+	
+	padding[sz1];
+};
 
 struct MetaDataBlock {
 	u32 sz;
@@ -151,52 +134,116 @@ struct MetaDataBlock {
 	if (cnt > 1) {
 	   DecompressedBlock blocks[cnt - 1];
 	}
+	
+	u32 unknownHeaders[4];
+	unknownStruct unknown1[CELLCNT];
+	
+	DDSxHolder textures[CELLCNT];
+	
 };
 
-struct Pad {
-    padding[16384 - pow];
+struct DetailMap {
+    u32 nameSz;
+    char name[nameSz];
+    
+    padding[4 - nameSz % 4];
 };
 
-struct LandRayTraceDump {
+struct LMap {
+	u32 magic;
+	u32 version;
+	
+	float gridCellSize;
+	float landCellSize;
+	
+	u32 mapSizeX;
+	u32 mapSizeY;
+	
+	IPoint2 origin;
+	
+	u32 hasTileData;
+	
+	u32 meshOfs;
+	u32 detailOfs;
+	u32 tileDataOfs;
+	u32 rayTracerOfs;
+	
+	CELLCNT = mapSizeX * mapSizeY;
+	
+	LandMesh mesh;
+	MetaDataBlock landClasses;
+	DetailMap detail;
+	
+};
+
+
+
+///////////////////////////////////////////////////////////////////////////
+//
+// TEX
+//
+
+
+struct TEX {
+    FastNameEx name;
     u32 sz;
-    char name[sz];
-    padding[sz % 4];
-    padding[6];
     
-    CompressedData cdat;
-    
-    padding[2];
+    DDSxHeader hdr;
 };
 
-struct DDSThing {
-    u24 hdr;
+
+
+///////////////////////////////////////////////////////////////////////////
+//
+// RIGz
+//
+
+
+
+struct RIGz {
+    CompressedData primLayer;
     
-    if (hdr >> 8 == 0xFFFF) {
-        padding[0xC];
-    } else {
-        u32 flag;
-        u32 sz;
-        u32 sz1;
-        
-        
-        u32 magic;
-        u32 format;
-        
-        padding[sz1 - 8];
-    }
+    u32 pregenDataSz;
+    CompressedData pregenData[32];
+    
+    u32 secLayerCellsSz;
+    CompressedData secLayerCells[6];
 };
 
-Header Hdr @ 0;
-FastNameMap ResList @ sizeof(Hdr);
-DxP2 DXP @ addressof(ResList) + sizeof(ResList);
-LandTextures Landtex @ addressof(DXP) + sizeof(DXP);
-CompressedData CDat @ addressof(Landtex) + sizeof(Landtex);
-UnknownStruct unk[pow] @ addressof(CDat) + sizeof(CDat); // power of 2, either 256 (2^8) or 1024 (2^10)
-UnknownList unk2 @ addressof(unk) + sizeof(unk);
-MetaDataBlock mblk @ addressof(unk2) + sizeof(unk2);
 
-u32 unknown[pow + 4] @ addressof(mblk) + sizeof(mblk);
-Pad P @ addressof(unknown) + sizeof(unknown);
 
-LandRayTraceDump LTD @ addressof(P) + sizeof(P);
-u32 a @ sizeof(LTD) + addressof(LTD);
+///////////////////////////////////////////////////////////////////////////
+//
+// -MAIN-
+//
+
+
+struct Tag {
+	u32 blockSz;
+	u32 label;
+	
+	if (label == 1145980160) {
+		char child[0];
+		
+		break;
+	} else if (label == 1885433196) {
+		LMap child;
+	} else if (label == 1280471378) {
+		FastLongNameMap child;
+	} else if (label == 1480938496) {
+	   TEX child;
+	} else if (label == 2051492178) {
+	   RIGz child;
+	} else {
+		std::print("Unknown tag {} @ {}", label, addressof(label));
+
+		char child[0];
+	}
+	
+	padding[blockSz - 4 - sizeof(child)];
+};
+
+
+Header hdr @ 0;
+
+Tag tags[100] @ sizeof(hdr);
