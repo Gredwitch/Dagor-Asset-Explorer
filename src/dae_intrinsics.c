@@ -1,35 +1,36 @@
 #include <stdio.h>
 #include <emmintrin.h>
 
+/*
 void printm128(char n[], __m128 a) {
 	float f_a[4];
 	_mm_store_ps(f_a, a);
 	printf("%s: %f, %f, %f, %f\n", n, f_a[0], f_a[1], f_a[2], f_a[3]);
 };
-
 void printm128i(char n[], __m128i a) {
 	float i_a[4];
 	_mm_store_si128((__m128i *)i_a, a);
 
 	printf("%s: %f, %f, %f, %f\n", n, i_a[0], i_a[1], i_a[2], i_a[3]);
 };
-
-__m128 get_v482(float cell_xz_sz, int htDelta) {
+*/
+extern void get_v482(float *dst, float cell_xz_sz, int htDelta) {
 	float _1div32767_0 = 1 / 32767.0f;
 
 	__m128 VC_1div32767_0 = _mm_load_ps((float[4]) {_1div32767_0, _1div32767_0, _1div32767_0, _1div32767_0});
 	__m128 VC_cell_xz_sz = _mm_load_ps((float[4]) {cell_xz_sz, 0.0f, 0.0f, 0.0f});
 	__m128 VC_htDelta = _mm_load_ps((float[4]) {(float) htDelta, 0.0f, 0.0f, 0.0f});
-
-	return _mm_mul_ps(
+	
+	_mm_store_ps(dst, _mm_mul_ps(
 		_mm_movelh_ps(
 			_mm_unpacklo_ps(
 				VC_cell_xz_sz,
 				VC_htDelta),
 			VC_cell_xz_sz),
-		VC_1div32767_0);
+		VC_1div32767_0));
 };
 
+/*
 __m128 get_cell_coords(__m128 cellOrigin, int htMin) { // v34
 	__m128 zeroF = _mm_setzero_ps();
 
@@ -97,7 +98,9 @@ extern void getPos(float *dst, int x, int z, int htDelta, float grid2world, floa
 
 	_mm_storeu_ps(dst, getPosInternal(v110_m, v112_m, v114_m, v482, cell_coords));
 };
-
+*/
 int main(int argc, char *args[]) {
+	// get_v482(2048.0f, 256);
+
 	return 0;
 }

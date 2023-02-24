@@ -16,27 +16,31 @@ from material import DDSx
 from datablock import loadDataBlock
 from pprint import pprint
 
-from misc import loadDLL
+from misc import loadDLL, matrix_mul
 import json
 import ctypes
 
 intrinsics = loadDLL("dae_intrinsics.dll")
+get_v482 = intrinsics.get_v482
 
-getPos = intrinsics.getPos
-getPos.argtypes = (
-	ctypes.POINTER(ctypes.c_float * 4),  # dst
-	ctypes.c_int,  # x
-	ctypes.c_int,  # z
-	ctypes.c_int,  # htDelta
-	ctypes.c_float,  # grid2world
-	ctypes.c_float,  # cell_xz_sz
-	ctypes.c_int,  # cellSz
-	ctypes.POINTER(ctypes.c_float * 4),  # cellOrigin
-	ctypes.c_int,  # htMin
-	ctypes.POINTER(ctypes.c_int * 4),  # v110
-	ctypes.POINTER(ctypes.c_int * 4),  # v112
-	ctypes.POINTER(ctypes.c_int * 4),  # v114
-)
+get_v482.argtypes = (ctypes.POINTER(ctypes.c_float), ctypes.c_float, ctypes.c_int)
+get_v482.restype = None
+
+# getPos = intrinsics.getPos
+# getPos.argtypes = (
+# 	ctypes.POINTER(ctypes.c_float * 4),  # dst
+# 	ctypes.c_int,  # x
+# 	ctypes.c_int,  # z
+# 	ctypes.c_int,  # htDelta
+# 	ctypes.c_float,  # grid2world
+# 	ctypes.c_float,  # cell_xz_sz
+# 	ctypes.c_int,  # cellSz
+# 	ctypes.POINTER(ctypes.c_float * 4),  # cellOrigin
+# 	ctypes.c_int,  # htMin
+# 	ctypes.POINTER(ctypes.c_int * 4),  # v110
+# 	ctypes.POINTER(ctypes.c_int * 4),  # v112
+# 	ctypes.POINTER(ctypes.c_int * 4),  # v114
+# )
 
 def formatMagic(magic:bytes):
 	return magic.decode("utf-8").replace("\x00", "")
@@ -546,7 +550,17 @@ class DagorBinaryLevelData(Exportable):
 			dz = self.cellSz * self.grid2world * 0.125
 			cell_xz_sz = self.cellSz * self.grid2world
 
-			cellOrigin = (ctypes.c_float * 4)(*cellOrigin)
+			v482 = (ctypes.c_float * 5)()
+			get_v482(v482, cell_xz_sz, htDelta)
+			v482 = v482[:4]
+
+			scaleFix = (
+				(1, 0, 0, 0),
+				(0, 1, 0, 0),
+				(0, 0, -1, 0),
+				(0, 0, 0, 1),
+			)
+
 			
 			for i in range(65):
 				j = i + 1
@@ -583,44 +597,31 @@ class DagorBinaryLevelData(Exportable):
 
 								blockBytes = block.read()
 
-								v110 = blockBytes[0:8] 
-								v112 = blockBytes[8:0x10] 
-								v114 = blockBytes[0x10:0x18]
-								# v110 = self.loadl_epi64(blockBytes[0:])
-								# v112 = self.loadl_epi64(blockBytes[8:])
-								# v114 = self.loadl_epi64(blockBytes[0x10:])
-								# print(v110)
-								# v110 = v110)
-								# v112 = v112)
-								# v114 = v114)
+								# v110 = list(unpack("4h", blockBytes[0:8]))
+								# v112 = list(unpack("4h", blockBytes[8:0x10]))
+								# v114 = list(unpack("4h", blockBytes[0x10:0x18]))
 
+								array = unpack("12h", blockBytes)
 
-								dst = (ctypes.c_float * 4)(0.0, 0.0, 0.0, 0.0)
-
-								getPos.argtypes = (
-									ctypes.POINTER(ctypes.c_float * 4),  # dst
-									ctypes.c_int,  # x
-									ctypes.c_int,  # z
-									ctypes.c_int,  # htDelta
-									ctypes.c_float,  # grid2world
-									ctypes.c_float,  # cell_xz_sz
-									ctypes.c_int,  # cellSz
-									ctypes.POINTER(ctypes.c_float * 4),  # cellOrigin
-									ctypes.c_int,  # htMin
-									# ctypes.POINTER(ctypes.c_int * 4), # v110
-									# ctypes.POINTER(ctypes.c_int * 4), # v112
-									# ctypes.POINTER(ctypes.c_int * 4)  # v114
-									ctypes.c_char_p,  # v110
-									ctypes.c_char_p,  # v112
-									ctypes.c_char_p,  # v114
+								pos = tuple(cellOrigin[i] + array[(4 * (i + 1)) - 1] * v482[i] for i in range(3))
+								matrix = list(
+									list(array[i + j * 4] / 256 for i in range(3)) for j in range(3)
 								)
+
+								for l in matrix:
+									l.append(0)
+								
+								matrix.append((0, 0, 0, 1))
+
+								matrix = matrix_mul(scaleFix, matrix)
+								
 
 								# print(unpack("2I", v110))
 								
-								getPos(dst, x, z, htDelta, self.grid2world, cell_xz_sz, self.cellSz, cellOrigin, cell.htMin, v110, v112, v114)
+								# getPos(dst, x, z, htDelta, self.grid2world, cell_xz_sz, self.cellSz, cellOrigin, cell.htMin, v110, v112, v114)
 								# log.log(f"{k} {(*dst, )}")
 
-								entTab.append((dst[0], dst[2], dst[1]))
+								entTab.append(((pos[0], pos[2], pos[1]), matrix))
 								# print("\tDEST = ", *dst)
 						else:
 							ofs += entCnter.riCount * 8
@@ -1439,15 +1440,15 @@ if __name__ == "__main__":
 	for ofs in riGen.riDataRel:
 		cell = riGen.riDataRel[ofs]
 
-		if cell.id != 561:
-			continue
+		# if cell.id != 561:
+		# 	continue
 		
 		riGen.getCellEntities(cell.id, entities)
 		
 				
-	# file = open("samples/rigen.json", "w")
-	# file.write(json.dumps(entities, indent=4))
-	# file.close()
+	file = open("samples/rigen.json", "w")
+	file.write(json.dumps(entities, indent=4))
+	file.close()
 
 	def exportEnts(map:DagorBinaryLevelData, entities):
 		gameRes:list[gameres.GameResourcePack] = []
@@ -1507,6 +1508,10 @@ if __name__ == "__main__":
 	"""
 import bpy
 from json import loads
+from mathutils import Vector, Matrix
+
+import bpy
+from json import loads
 from mathutils import Vector
 
 path = "C:/Users/Gredwitch/Documents/WTBS/DagorAssetExplorer/samples"
@@ -1520,32 +1525,33 @@ objects = {}
 for ent in entities:
     if len(entities[ent]) == 0:
         print(f"Skipping {ent}")
-		
+        
         continue
-	
-	try:
-		imported_object = bpy.ops.import_scene.obj(filepath = f"{path}/{ent}_0.obj")
-		selected_object = bpy.context.selected_objects[0]
-		
-		objects[ent] = selected_object
+    
+    try:
+        imported_object = bpy.ops.import_scene.obj(filepath = f"{path}/{ent}_0.obj")
+        selected_object = bpy.context.selected_objects[0]
+        
+        objects[ent] = selected_object
     except Exception as e:
         print(f"Failed to import {ent}: {e}")
-		
+        
         continue
-	
+    
 
 for entIdx, ent in enumerate(objects):
-    posTab = entities[ent]
-	selected_object = objects[ent]
-	
-    for k, pos in enumerate(posTab):
-        print(f"[{entIdx + 1}/{len(objects)}]: {ent} - Processing {k + 1}/{len(posTab)}") 
-		
+    transformTab = entities[ent]
+    selected_object = objects[ent]
+    
+    for k, transform in enumerate(transformTab):
+        print(f"[{entIdx + 1}/{len(objects)}]: {ent} - Processing {k + 1}/{len(transformTab)}") 
+        
         new_object = selected_object.copy()
         new_object.data = selected_object.data.copy()
-		
-        new_object.location = Vector(pos)
-		
+        
+        new_object.matrix_world @= Matrix(transform[1])
+        new_object.location = Vector(transform[0])
+        
         bpy.context.collection.objects.link(new_object)
     
     bpy.data.objects.remove(selected_object)

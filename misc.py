@@ -15,7 +15,21 @@ def loadDLL(name:str):
 	else:
 		return cdll.LoadLibrary(dllPath)
 
-
+def matrix_mul(A, B):
+	if len(A[0]) != len(B):
+		raise ValueError("Matrix dimensions do not match")
+	
+	# Initialize the result matrix with zeros
+	result = [[0 for _ in range(len(B[0]))] for _ in range(len(A))]
+	
+	# Compute the matrix multiplication
+	for i in range(len(A)):
+		for j in range(len(B[0])):
+			for k in range(len(B)):
+				result[i][j] += A[i][k] * B[k][j]
+	
+	return result
+	
 def vectorTransform(matrix, vector):
 	result = [0, 0, 0]
 
