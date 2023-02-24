@@ -44,14 +44,15 @@ namespace MVD {
 		padding[8];
 	};
 
-	struct LODInfo {
-		u32 vCount;
+	struct VertexData {
+		u32 vCnt;
 		u8 vStride;
-		u24 idxPackedSz;
-		u32 idxSize;
-		u64 flags;
+		u24 iPackedSz;
+		u32 iSz;
+		u16 flags;
+		u16 bf_14;
+		u32 iCnt;
 		u32 storageFormat;
-		padding[8];
 	};
 
 	Header Hdr @ 0;

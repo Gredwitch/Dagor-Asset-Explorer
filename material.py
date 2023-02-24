@@ -153,11 +153,17 @@ class DDSx(Exportable):
 
 		self.__header:DDSx.Header = None
 
-		if header == None:
+		if file == None:
 			self.__loadSingleFile__(filePath)
 		else:
-			self.__loadFromDXP__(name, header, file)
-	
+			if header == None:
+				header = self.Header(BinFile(file[:0x20]))
+				file = file[0x20:]
+			
+			self.__loadFromBytes__(name, header, file)
+
+		self.setSize(self.__header.memSz)
+
 	def __loadSingleFile__(self, filePath:str):
 		fileName = path.splitext(path.basename(filePath))[0]
 		self.setFileName(fileName)
@@ -175,9 +181,9 @@ class DDSx(Exportable):
 
 		log.subLevel()
 
-	def __loadFromDXP__(self, name:str, header:Header, file:bytes):
+	def __loadFromBytes__(self, name:str, header:Header, file:bytes):
 		self.setFileName(name)
-		self.setName(name.split('*')[0])
+		self.setName(name.split('*')[0].split("$")[0])
 
 		log.log(f"Loading {name} from DXP")
 		log.addLevel()
@@ -195,7 +201,7 @@ class DDSx(Exportable):
 		if cMethod == 0x20:
 			data = zstdDecompress(data)
 		elif cMethod == 0x60:
-			data = oodleDecompress(data, bufferSize = self.__header.memSz)
+			data = oodleDecompress(data, maxOriginalSize = self.__header.memSz)
 		elif cMethod == 0x80:
 			data = zlibDecompress(data)
 		elif cMethod == 0x40:
@@ -203,6 +209,9 @@ class DDSx(Exportable):
 		
 		return data
 
+	
+	def getPixelCnt(self):
+		return self.__header.w * self.__header.h
 	
 	def getMipSize(self, width:int, height:int, dxtVersion:bytes):
 		dxtSize = max(1, (width + 3) // 4) * max(1, (height + 3) // 4)
@@ -292,9 +301,10 @@ class DDSx(Exportable):
 
 		output = path.normpath(f"{output}\\{fileName}")
 
-		binData = self.getDDS()
-
 		log.log(f"Saving {fileName}")
+		log.addLevel()
+
+		binData = self.getDDS()
 
 		file = open(output, "wb")
 
@@ -303,6 +313,7 @@ class DDSx(Exportable):
 		file.close()
 
 		log.log(f"Wrote {len(binData)} bytes to {output}")
+		log.subLevel()
 	
 	def save(self, output:str = getcwd()):
 		fileName = f"{self.getFileName()}.ddsx"
@@ -639,6 +650,17 @@ class MaterialTemplateLibrary:
 
 			log.log(f"Wrote {len(data)} bytes to {output}")
 		
+		def getBestTex(self, ddsx:list[DDSx]):
+			best = ddsx[0]
+			
+			for i in range(1, len(ddsx)):
+				cur = ddsx[i]
+
+				if cur.getPixelCnt() > best.getPixelCnt():
+					best = cur
+
+			return best
+		
 		def __exportDiffuse__(self):
 			name = self.material.diffuse.split("*")[0]
 
@@ -653,7 +675,7 @@ class MaterialTemplateLibrary:
 
 			# log.log(f"Exporting diffuse to {output}")
 			
-			data = ddsx[0].getDDS()
+			data = self.getBestTex(ddsx).getDDS()
 
 			self.__saveTexture__(data, output)
 		
@@ -669,7 +691,7 @@ class MaterialTemplateLibrary:
 
 			# log.log(f"Exporting bumpmap to {output}")
 			
-			data = ddsx[0].getDDS()
+			data = self.getBestTex(ddsx).getDDS()
 
 			self.__saveTexture__(data, output)
 

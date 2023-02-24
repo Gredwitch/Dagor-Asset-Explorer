@@ -13,15 +13,20 @@ from misc import vectorTransform
 
 ###########################################
 # 
+# - add shaderskinnedmesh parsing (pilot_china)
+# - better MTL generation
+#
 # - fix dynmodel transforms: move all verts to center of rigid
 # 	=> make an ObjectNode class: <name> <verts> <faces> <transform> <list of ShaderMeshElems>
 # 	=> export each object after making the ObjectNode list
 #
+# - Rewrote the RendInst OBJ exporter so it takes into account baseVertex and vdOrderIndex ShaderMesh element attributes
+# - FIXED: Some RendInst have screwed up face indices
+# - FIXED: Some RendInst have incoherent vertex start and end indices
+#
 # - look into special cases:
-#   => fucked faces: peugeot_402 from cars_ri.grp
 #   => fucked skeleton transforms: enlisted weapons (stg44)
 #
-# - add shaderskinnedmesh parsing (pilot_china)
 # - impostor data parsing?
 # 
 
@@ -376,8 +381,6 @@ class RendInst(Exportable):
 		
 		self.setTextures(nameMap)
 
-		print(nameMap)
-
 	def setTextures(self, textures:list[str]):
 		self.__textures = textures
 	
@@ -461,7 +464,7 @@ class RendInst(Exportable):
 		
 		vertexDataCnt = mvd.getVDCount()
 		shaderMeshElems = self.__shaderMesh[lodId].shaderMesh.elems
-		vertexDatas:list[MatVData.VertexData] = [None for i in range(vertexDataCnt)]
+		vertexDatas:list[list[MatVData.VertexData, int]] = [None for i in range(vertexDataCnt)]
 
 
 		obj = ""
@@ -469,64 +472,74 @@ class RendInst(Exportable):
 
 		vOfs = 0
 
+		vertexOrder:dict[int, list[ShaderMesh.Elem]] = {}
+
 		for k, elem in enumerate(shaderMeshElems):
-			log.log(f"Processing shader mesh {k}")
-			log.addLevel()
-
-			if k != 0:
-				prev = shaderMeshElems[k - 1]
-
-				if prev.vData != elem.vData:
-					vOfs += prev.numV
-
+			if not elem.vdOrderIndex in vertexOrder:
+				vertexOrder[elem.vdOrderIndex] = []
+			
 			if vertexDatas[elem.vData] == None:
-				vertexDatas[elem.vData] = mvd.getVertexData(elem.vData)
-			
-			vertexData = vertexDatas[elem.vData]
-
-			verts, UVs, faces = vertexData.getVertices(), vertexData.getUVs(), vertexData.getFaces()
-
-			objVerts = ""
-			objUV = ""
-
-			for i in range(elem.startV, elem.startV + elem.numV):
-				v = verts[i]
-
-				objVerts += f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n"
-
-				uv = UVs[i]
-
-				objUV += f"vt {uv[0]:.4f} {uv[1]:.4f}\n"
-
-
-			obj += objVerts + objUV
-
-			objFaces += f"usemtl {self.getMaterialName(elem.mat)}\n"
-
-			curFace = elem.startI // 3
-
-			for i in range(curFace, curFace + elem.numFace):
-				face = faces[i]
-
-				f = ""
-
-				for idx in face:
-					idx += 1 + vOfs
-
-					f += f" {idx}/{idx}"
-					
-				if f == "":
-					continue
+				vData = mvd.getVertexData(elem.vData)
+				vertexDatas[elem.vData] = [vData, vOfs]
 				
-				objFaces += f"f{f}\n"
-			
-			log.subLevel()
+				objVerts = ""
+				objUV = ""
+				
+				verts, UVs = vData.getVertices(), vData.getUVs()
+				vCnt = len(verts)
+
+				for i in range(vCnt):
+					v = verts[i]
+
+					objVerts += f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n"
+
+					uv = UVs[i]
+
+					objUV += f"vt {uv[0]:.4f} {uv[1]:.4f}\n"
+
+				obj += objVerts + objUV
+				vOfs += vCnt
+
+			vertexOrder[elem.vdOrderIndex].append(elem)
+
+			elem.smid = k # TODO: put this in the class constructor
+
+		for orderElems in vertexOrder.values():
+			for elem in orderElems:
+				log.log(f"Processing shader mesh {elem.smid}")
+				log.addLevel()
+
+				vertexData = vertexDatas[elem.vData][0]
+				vOfs = vertexDatas[elem.vData][1] + elem.baseVertex
+
+				faces = vertexData.getFaces()
+
+				objFaces += f"usemtl {self.getMaterialName(elem.mat)}\n"
+				
+				curFace = elem.startI // 3
+
+				for i in range(curFace, curFace + elem.numFace):
+					face = faces[i]
+
+					f = ""
+
+					for idx in face:
+						idx += 1 + vOfs
+
+						f += f" {idx}/{idx}"
+						
+					if f == "":
+						continue
+					
+					objFaces += f"f{f}\n"
+
+				log.subLevel()
 
 		obj += objFaces
 
 		return obj
 	
-	def exportObj(self, lodId:int):
+	def exportObj(self, lodId:int, output:str = getcwd()):
 		log.log(f"Quick exporting LOD {lodId} as OBJ")
 		log.addLevel()
 
@@ -545,7 +558,7 @@ class RendInst(Exportable):
 
 			mtl = MaterialTemplateLibrary(materials)
 			
-			file = open(name + ".mtl", "w")
+			file = open(output + "/" + name + ".mtl", "w")
 			file.write(mtl.getMTL())
 			file.close()
 
@@ -555,7 +568,7 @@ class RendInst(Exportable):
 
 			obj = "mtllib " + name + ".mtl\n" + obj
 
-		file = open(fileName, "w")
+		file = open(output + "/" + fileName, "w")
 		file.write(obj)
 		file.close()
 
@@ -696,6 +709,7 @@ class DynModel(RendInst):
 			self.__noScale = True
 		
 		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(self.getLodCnt())) # occ table is acutally a float[4 * lodCnt]
+		
 
 	def readSceneNodes(self, file:BinBlock):
 		log.log("Processing scene nodes")
@@ -785,7 +799,7 @@ class DynModel(RendInst):
 	def getGeomNodeTree(self):
 		return self.__skeleton
 
-	def getObj(self, lodId:int):
+	def getObj(self, lodId:int): # TODO: rewrite - use vdorderindex and basevertex attributes
 		
 		log.log(f"Generating LOD {lodId} OBJ for {self.getName()}")
 		log.addLevel()
@@ -1360,6 +1374,7 @@ class GameResourcePack(Exportable): # may need cleanup / TODO: rewrite like DXP2
 			if v.getName() == name:
 				return k
 
+		raise ValueError(f"No such resource {name} in gameres {self}")
 
 	def getResourceByName(self, name:str):
 		return self.getRealResource(self.getRealResId(name))
@@ -1371,67 +1386,33 @@ class GameResourcePack(Exportable): # may need cleanup / TODO: rewrite like DXP2
 
 if __name__ == "__main__":
 	from assetcacher import ASSETCACHER
+	import material
 
-	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin")
-	# ASSETCACHER.appendGameResDesc(desc)
-
-	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\dynModelDesc.bin")
-	# ASSETCACHER.appendGameResDesc(desc)
-
-	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\pkg_cockpits\\res\\dynModelDesc.bin")
-	# desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\patch\\content\\base\\res\\dynModelDesc.bin")
-
-	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
-	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\vegetation.grp")
-	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\pkg_local\\res\\bus_stop.grp")
-	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\pilots.grp")
-	
-	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\vehicles\\pv_kubelwagen.grp")
-	# grp = GameResourcePack("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\res\\equipment\\weapons_germany.grp")
-	
-	# grp.getAllRealResources()
-	rrd = grp.getResourceByName("user_example_bus_stop_a")
-	rrd.save()
-	ri:DynModel = rrd.getChild()
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp.old")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\nvrsk_buildings.grp")
+	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\abandoned_factory.grp")
+
+	# ASSETCACHER.appendGameResDesc(GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin"))
+
+	# def loadDXP(path):
+	# 	dxp = material.DDSxTexturePack2(path)
+
+	# 	for ddsx in dxp.getAllDDSx():
+	# 		if ddsx != False:
+	# 			ASSETCACHER.cacheAsset(ddsx)
+	# loadDXP("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.dxp.bin")
+	# loadDXP("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\hq_tex\\res\\hq_tex_cars_ri.dxp.bin")
+
+	# rrd = grp.getResourceByName("peugeot_402")
+	# rrd = grp.getResourceByName("pzkpfw_IV_ausf_F")
+	# rrd = grp.getResourceByName("pilot_china1")
+	rrd = grp.getResourceByName("af_central_building")
+	# rrd.save()
+	# print(rrd.getOffset())
+	ri:RendInst = rrd.getChild()
+	# ri.getMatVData().save()
+	# ri.setMaterials(ASSETCACHER.getModelMaterials(rrd.getName()))
+	# rrd.save()
 	ri.exportObj(0)
 	
-	# resId = grp.getRealResId("pilot_china1")
-	# resId = grp.getRealResId("pzkpfw_IV_ausf_F")
-	# resId = grp.getRealResId("dodge_wf32")
-	# rrd = grp.getRealResource(resId)
-	# rrd.save()
-	
-
-	# skeRrdId = grp.getRealResId("mas_36_with_bayonet_skeleton")
-	# skeRrdId = grp.getRealResId(rrd.getName() + "_skeleton")
-	# skeRrd = grp.getRealResource(skeRrdId)
-	
-	# ri:DynModel = rrd.getChild()
-	# # ri.setMaterials(ASSETCACHER.getModelMaterials(ri.getName()))
-	# ske:GeomNodeTree = skeRrd.getChild()
-	
-	# ri.setGeomNodeTree(ske)
-	
-	# ri.exportObj(0)
-
-	# ske.print_tree(ske.getNodeByName(""))
-	# rrd.save()
-	# print(ri.getMTL())
-
-	# mvd = ri.getMatVData()
-	# mvd.quickExportVDataToObj(6)
-	# mvd.quickExportVDataToObj(5)
-
-	# for rrd in grp.getAllRealResources():
-	# 	if rrd.getClassName() != "rendInst":
-	# 		continue
-			
-	# 	log.log(f"Processing {rrd.getName()}")
-	# 	log.addLevel()
-
-	# 	ri:RendInst = rrd.getChild()
-		
-	# 	ri.getObj(0)
-
-	# 	log.subLevel()

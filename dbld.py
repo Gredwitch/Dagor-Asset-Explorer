@@ -3,7 +3,7 @@ from os import path, getcwd
 
 
 from fileread import *
-from decompression import CompressedData, zlibDecompress, zstdCompress
+from decompression import CompressedData, zlibDecompress, zstdCompress, compressBlock
 # from math import * #acos, degrees
 from terminable import Exportable
 from struct import unpack, pack
@@ -11,11 +11,32 @@ from enums import *
 
 import log
 # from terminable import Exportable
-# from ddsx import DDSxPack
-from mesh import MatVData, MaterialData
+from mesh import MatVData, MaterialData, ShaderMesh
+from material import DDSx
 from datablock import loadDataBlock
 from pprint import pprint
 
+from misc import loadDLL
+import json
+import ctypes
+
+intrinsics = loadDLL("dae_intrinsics.dll")
+
+getPos = intrinsics.getPos
+getPos.argtypes = (
+	ctypes.POINTER(ctypes.c_float * 4),  # dst
+	ctypes.c_int,  # x
+	ctypes.c_int,  # z
+	ctypes.c_int,  # htDelta
+	ctypes.c_float,  # grid2world
+	ctypes.c_float,  # cell_xz_sz
+	ctypes.c_int,  # cellSz
+	ctypes.POINTER(ctypes.c_float * 4),  # cellOrigin
+	ctypes.c_int,  # htMin
+	ctypes.POINTER(ctypes.c_int * 4),  # v110
+	ctypes.POINTER(ctypes.c_int * 4),  # v112
+	ctypes.POINTER(ctypes.c_int * 4),  # v114
+)
 
 def formatMagic(magic:bytes):
 	return magic.decode("utf-8").replace("\x00", "")
@@ -111,7 +132,7 @@ class DagorBinaryLevelData(Exportable):
 		return name
 	
 	class BlockHeader:
-		def __init__(self, file, idx:int):
+		def __init__(self, file:BinFile, idx:int):
 			self.data = file.read(20)
 			self.name = file.read(4)
 
@@ -124,17 +145,24 @@ class DagorBinaryLevelData(Exportable):
 			structSize = 8
 
 			def __repr__(self):
-				return f"<PregEntCounter @ {self.ofs}: p={hex(self.p)}>"
+				return f"<PregEntCounter: riResIdxLow={hex(self.riResIdxLow)} riCount={hex(self.riCount)} riResIdxHigh={hex(self.riResIdxHigh)} v={self.raw}>"
 
 			def __init__(self, file:BinFile):
-				# self.ofs = ofs
+				val = readInt(file)
 
-				# oldO = file.tell()
-				# file.seek(ofs, 0)
-				self.ofs = file.tell()
-				self.p = readLong(file)
+				self.raw = val
+				# self.val = pack("I", val)
+				# self.val = " ".join((hex(self.val[i])[2:] for i in range(4)))
 
-				# file.seek(oldO, 0)
+				self.riResIdxLow = val & (2**10 - 1) # val & 0x3FF
+
+				val >>= 10
+
+				self.riCount = val & (2**20 - 1) # (val >> 10) & 0xFFFFF
+
+				val >>= 20
+
+				self.riResIdxHigh = val & (2**2 - 1)
 			
 		class Cell:
 			class LandClassCoverage:
@@ -159,7 +187,7 @@ class DagorBinaryLevelData(Exportable):
 			def __repr__(self):
 				return f"<Cell @ {self.ofs}: rtData={hex(self.rtData)} htMin={self.htMin} htDelta={self.htDelta} riDataRelOfs={hex(self.riDataRelOfs)}>"
 
-			def __init__(self, file:BinFile, id:int):
+			def __init__(self, riGen, file:BinFile, id:int):
 				# log.log(f"Cell #{id}:")
 				# log.addLevel()
 
@@ -169,6 +197,8 @@ class DagorBinaryLevelData(Exportable):
 				self.coverageCnt = readInt(file)
 
 				file.seek(coverageOfs, 0)
+
+				self.id = id
 
 				self.coverage = tuple(self.LandClassCoverage(file) for i in range(self.coverageCnt))
 				
@@ -184,7 +214,7 @@ class DagorBinaryLevelData(Exportable):
 
 				self.rtData = readLong(file)
 
-				self.htMin = readShort(file)
+				self.htMin = readSignedShort(file)
 				self.htDelta = readShort(file)
 				self.riDataRelOfs = readInt(file)
 
@@ -193,13 +223,17 @@ class DagorBinaryLevelData(Exportable):
 				# log.log(f"htDelta          = {self.htDelta}")
 				# log.log(f"riDataRelOfs     = {self.riDataRelOfs}")
 				
-				entOfs = file.tell()
-
 				# self.entCnt = tuple(Map.RendInstGenData.PregEntCounter(file, entOfs + i * Map.RendInstGenData.PregEntCounter.structSize)
 				# 					for i in range(65))
 
-				self.entCnt = tuple(DagorBinaryLevelData.RendInstGenData.PregEntCounter(file) for i in range(65))
+				# self.entCnt = [(readLong(file) - rigz.entCntOfs) // 4 for _ in range(65)]
 				
+				self.entCnt = [self.getEnt(riGen, readLong(file)) for _ in range(65)]
+				# self.entCnt = [rigz.entCnt[(readLong(file) - rigz.entCntOfs) // 4] for _ in range(65)]
+				
+
+				if self.riDataRelOfs != 0xFFFFFFFF:
+					riGen.riDataRel[self.riDataRelOfs] = self
 				# log.log("entCnt:")
 				# log.addLevel()
 
@@ -209,7 +243,14 @@ class DagorBinaryLevelData(Exportable):
 				# log.subLevel()
 
 				# log.subLevel()
+			def getEnt(self, riGen, l) -> int:
+				c = (l - riGen.entCntOfs) // 4
 
+				if c == len(riGen.entCnt):
+					c = 0
+				
+				# return rigz.entCnt[c]:DagorBinaryLevelData.RendInstGenData.PregEntCounter
+				return c
 		class LandClassRec:
 			def __repr__(self):
 				return f"<LandClassRec @ {self.ofs}: name={self.landClassName} asset={self.asset} mask={hex(self.mask)}>"
@@ -224,7 +265,7 @@ class DagorBinaryLevelData(Exportable):
 		
 		class PregenEntPoolDesc:
 			def __repr__(self):
-				return f"<PregenEntPoolDesc @ {self.ofs}: name={self.riName}>"
+				return f"<PregenEntPoolDesc @ {self.ofs}: colpair=({hex(self.colPair[0])}, {hex(self.colPair[1])}) posInst={self.posInst} paletteRotation={self.paletteRotation} _resv30={self._resv30} paletteRotationCount={self.paletteRotationCount} name={self.riName}>"
 			
 			def __init__(self, file:BinFile):
 				self.ofs = file.tell()
@@ -241,7 +282,7 @@ class DagorBinaryLevelData(Exportable):
 				self._resv30 = v & 0xFFFFFF00
 
 				self.paletteRotationCount = readInt(file)
-
+		
 		def __init__(self, file:BinFile, size:int):
 			self.rtData = readLong(file)
 
@@ -253,12 +294,14 @@ class DagorBinaryLevelData(Exportable):
 
 			file.seek(8, 1)
 
-			self.numCellW = readInt(file)
-			self.numCellH = readInt(file)
-			self.cellSz = readShort(file)
-			self.dataFlags = readByte(file)
-			self.perInstDataDwords = readByte(file)
-			self.sweepMaskScale = unpack("f", file.read(4))[0]
+			self.numCellW:int = readInt(file)
+			self.numCellH:int = readInt(file)
+			self.cellSz:int = readShort(file)
+			self.dataFlags:int = readByte(file)
+			self.perInstDataDwords:int = readByte(file)
+			self.sweepMaskScale:float = unpack("f", file.read(4))[0]
+
+			self.riDataRel:dict[int, DagorBinaryLevelData.RendInstGenData.Cell] = {}
 			
 			file.seek(8, 1) # RoHugeHierBitMap2d<4,3>
 
@@ -277,18 +320,18 @@ class DagorBinaryLevelData(Exportable):
 
 			file.seek(8, 1)
 
-			self.world0Vxz = unpack("ffff", file.read(4 * 4))
-			self.invGridCellSzV = unpack("ffff", file.read(4 * 4))
-			self.lastCellXZXZ = unpack("ffff", file.read(4 * 4))
+			self.world0Vxz:tuple[float, float, float, float] = unpack("ffff", file.read(4 * 4))
+			self.invGridCellSzV:tuple[float, float, float, float] = unpack("ffff", file.read(4 * 4))
+			self.lastCellXZXZ:tuple[float, float, float, float] = unpack("ffff", file.read(4 * 4))
 
 			log.log(f"world0Vxz          = {self.world0Vxz}")
 			log.log(f"invGridCellSzV     = {self.invGridCellSzV}")
 			log.log(f"lastCellXZXZ       = {self.lastCellXZXZ}")
 
-			self.grid2world = unpack("f", file.read(4))[0]
-			self.densMapPivotX = unpack("f", file.read(4))[0]
-			self.densMapPivotZ = unpack("f", file.read(4))[0]
-			self.pregenDataBaseOfs = readInt(file)
+			self.grid2world:float = unpack("f", file.read(4))[0]
+			self.densMapPivotX:float = unpack("f", file.read(4))[0]
+			self.densMapPivotZ:float = unpack("f", file.read(4))[0]
+			self.pregenDataBaseOfs:int = readInt(file)
 
 			log.log(f"grid2world         = {self.grid2world}")
 			log.log(f"densMapPivotX      = {self.densMapPivotX}")
@@ -301,21 +344,94 @@ class DagorBinaryLevelData(Exportable):
 
 			log.log(f"Found {pregenEntCnt} pregen ents @ {pregenEntOfs}")
 
-			self.fpLevelBin = readLong(file)
+			self.fpLevelBin:int = readLong(file)
 
 			log.log(f"fpLevelBin         = {self.fpLevelBin}")
 
 			file.seek(0x10, 1)
 
+
+			file.seek(cellsOfs, 0)
+			cellBlock = file.readBlock(0x228 * cellCnt)
+
+			self.entCntOfs = file.tell()
+			entCntSz = pregenEntOfs - self.entCntOfs
+			entCntNum = entCntSz // 4
+
+			log.log(f"Found {entCntNum} ent counters @ {file.tell()}")
+			log.addLevel()
+
+			self.entCnt = tuple(self.PregEntCounter(file) for i in range(entCntNum))
+
+			# for k, v in enumerate(self.entCnt):
+			# 	log.log(f"{k}: {v}")
+			
+			log.subLevel()
 			
 			log.log(f"Found {cellCnt} cells @ {cellsOfs}")
 			log.addLevel()
 
-			file.seek(cellsOfs, 0)
-			self.cells = tuple(self.Cell(file, i) for i in range(cellCnt))
+			self.cellsOfs = cellsOfs
+			self.cells = tuple(self.Cell(self, cellBlock, i) for i in range(cellCnt))
+			
 
 			for k, v in enumerate(self.cells):
-				log.log(f"{k}: {v}")
+				if v.riDataRelOfs != 0xFFFFFFFF and k == 87877:
+					if k > 0:
+						break
+
+					log.log(f"{k}: {v}")
+					log.addLevel()
+
+					cellEntCnt = v.entCnt
+
+					j = 1
+
+					for i in range(0, 64):
+						entIdx = cellEntCnt[i]
+						oldEntIdx = entIdx
+						entNextIdx = cellEntCnt[j]
+
+						ent = self.entCnt[entIdx]
+						entNext = self.entCnt[entNextIdx]
+						
+						if ent.raw < entNext.raw:
+						# 	entIdx = i
+
+							# while True:
+						# 		# log.log("Hacking...")
+								testIdx = ent.riResIdxLow
+
+								# if ent.riResIdxLow >= pregenEntCnt:
+								# 	raise Exception("Unfunny!!!")
+
+						# 		entIdx += 1
+
+						# 		if entIdx >= 64:
+						# 			raise Exception("entIdx failure")
+								
+						# 		ent = cellEntCnt[entIdx]
+								
+						# 		if ent.raw >= entNext.raw:
+						# 			break
+							
+						# 	cellEntCnt[i] = ent
+
+						# log.log(f"{i} {j} {oldEnt} -> {ent} | {entNext}")
+						log.log(f"{ent}")
+
+						j += 1
+					log.subLevel()
+
+					# log.addLevel()
+					# log.log("entCnt:")
+					# log.addLevel()
+
+					# for k, v in enumerate(v.entCnt):
+					# 	log.log(f"{k}: {v}")
+
+					# log.subLevel()
+					# log.subLevel()
 
 			log.subLevel()
 
@@ -342,15 +458,15 @@ class DagorBinaryLevelData(Exportable):
 
 			self.landClasses[-1].landClassName = formatMagic(file.read(landClsOfs - self.landClasses[-1].landClassNameOfs))
 			
-			for k, v in enumerate(self.landClasses):
-				log.log(f"{k}: {v}")
+			# for k, v in enumerate(self.landClasses):
+			# 	log.log(f"{k}: {v}")
 
 			log.subLevel()
 
 			log.log("Pregen ents:")
 			log.addLevel()
 
-			self.pregenEnts = []
+			self.pregenEnts:list[DagorBinaryLevelData.RendInstGenData.PregenEntPoolDesc] = []
 
 			for k in range(pregenEntCnt):
 				file.seek(pregenEntOfs + k * 32, 0)
@@ -374,7 +490,315 @@ class DagorBinaryLevelData(Exportable):
 				log.log(f"{k}: {v}")
 			
 			log.subLevel()
-	
+
+		def loadl_epi64(self, mem_addr):
+			return (ctypes.c_int * 4)(*unpack("4i", mem_addr[:8] + b"\x00" * 8)) #8h
+		
+		def processRiDataRel(self, file:BinBlock):
+			self.riDataRelFiles = {}
+
+			for riDataRelIdx, riDataRelOfs in enumerate(self.riDataRel):
+				riDataRelOfs = file.tell()
+
+				cell:DagorBinaryLevelData.RendInstGenData.Cell = self.riDataRel[riDataRelOfs]
+
+				log.log(f"Cell {cell.id}: RiDataRel {riDataRelIdx} @ {riDataRelOfs}")
+				log.addLevel()
+
+				file.seek(riDataRelOfs, 0)
+
+				riDataRel = BinFile(CompressedData(file).decompress())
+
+				self.riDataRelFiles[riDataRelOfs] = riDataRel
+
+
+				# for k, v in enumerate(cell.entCnt):
+				# 	log.log(f"{k}: idx={v} ({hex(self.entCnt[v].riResIdxHigh)}) {hex(self.entCnt[v].riCount)} x [{hex(self.entCnt[v].riResIdxLow)}]{self.pregenEnts[self.entCnt[v].riResIdxLow].riName} = {hex(self.entCnt[v].raw)}")
+				
+				log.subLevel()
+		
+		def getCellEntities(self, cellId:int, entities:dict[str, list[tuple[float, float, float, float]]] = {}):
+			cell = self.cells[cellId]
+
+			log.log(f"Gathering entities for cell {cellId}")
+			log.addLevel()
+
+			riData:BinFile = self.riDataRelFiles[cell.riDataRelOfs]
+			riData.seek(0, 0)
+			# riData.quickSave(f"abandoned_factory_0_{cellId}.rirel")
+
+			ofs = 0
+
+			x = cell.id % self.numCellW
+			z = cell.id // self.numCellW
+
+			if cell.htDelta == 0:
+				htDelta = 0x2000
+			else:
+				htDelta = cell.htDelta
+			
+			cellOrigin = (
+				(self.grid2world * x * self.cellSz) + self.world0Vxz[0],
+				cell.htMin,
+				(self.grid2world * z * self.cellSz) + self.world0Vxz[1],
+				1.0)
+			
+			dz = self.cellSz * self.grid2world * 0.125
+			cell_xz_sz = self.cellSz * self.grid2world
+
+			cellOrigin = (ctypes.c_float * 4)(*cellOrigin)
+			
+			for i in range(65):
+				j = i + 1
+
+				entCnterIdx = cell.entCnt[i]
+
+				if i == 64:
+					nextCnterIdx = entCnterIdx
+				else:
+					nextCnterIdx = cell.entCnt[j]
+
+				if entCnterIdx < nextCnterIdx:
+					log.log(f"{entCnterIdx=}")
+					log.addLevel()
+
+					while True:
+						entCnter = self.entCnt[entCnterIdx]
+						ent = self.pregenEnts[entCnter.riResIdxLow]
+
+						if not ent.riName in entities:
+							entities[ent.riName] = []
+						
+						entTab = entities[ent.riName]
+
+						log.log(f"@{ofs}\t{entCnter.riCount} x {ent.riName} ({ent.paletteRotationCount}, {ent.posInst})")
+
+						if ent.posInst == 0:
+							ofs += entCnter.riCount * 24
+
+							for k in range(entCnter.riCount):
+								block = riData.readBlock(24)
+											
+								block.seek(6, 0)
+
+								blockBytes = block.read()
+
+								v110 = blockBytes[0:8] 
+								v112 = blockBytes[8:0x10] 
+								v114 = blockBytes[0x10:0x18]
+								# v110 = self.loadl_epi64(blockBytes[0:])
+								# v112 = self.loadl_epi64(blockBytes[8:])
+								# v114 = self.loadl_epi64(blockBytes[0x10:])
+								# print(v110)
+								# v110 = v110)
+								# v112 = v112)
+								# v114 = v114)
+
+
+								dst = (ctypes.c_float * 4)(0.0, 0.0, 0.0, 0.0)
+
+								getPos.argtypes = (
+									ctypes.POINTER(ctypes.c_float * 4),  # dst
+									ctypes.c_int,  # x
+									ctypes.c_int,  # z
+									ctypes.c_int,  # htDelta
+									ctypes.c_float,  # grid2world
+									ctypes.c_float,  # cell_xz_sz
+									ctypes.c_int,  # cellSz
+									ctypes.POINTER(ctypes.c_float * 4),  # cellOrigin
+									ctypes.c_int,  # htMin
+									# ctypes.POINTER(ctypes.c_int * 4), # v110
+									# ctypes.POINTER(ctypes.c_int * 4), # v112
+									# ctypes.POINTER(ctypes.c_int * 4)  # v114
+									ctypes.c_char_p,  # v110
+									ctypes.c_char_p,  # v112
+									ctypes.c_char_p,  # v114
+								)
+
+								# print(unpack("2I", v110))
+								
+								getPos(dst, x, z, htDelta, self.grid2world, cell_xz_sz, self.cellSz, cellOrigin, cell.htMin, v110, v112, v114)
+								# log.log(f"{k} {(*dst, )}")
+
+								entTab.append((dst[0], dst[2], dst[1]))
+								# print("\tDEST = ", *dst)
+						else:
+							ofs += entCnter.riCount * 8
+
+							riData.seek(entCnter.riCount * 8, 1)
+
+						entCnterIdx += 1
+
+						if entCnterIdx >= nextCnterIdx:
+							break
+					log.subLevel()
+				
+				else:
+					... # load from land class
+			
+			log.subLevel()
+
+			return entities
+			
+	class LandMeshManager:
+		class LandMesh:
+			class CellData:
+				def __init__(self, file:BinBlock,):
+					blockSz = readInt(file)
+
+					self.land = tuple((readInt(file), ShaderMesh(file)) for _ in range(2))
+					self.decal = (readInt(file), ShaderMesh(file))
+					self.combined = (readInt(file), ShaderMesh(file))
+
+					if file.tell() < file.getSize():
+						self.patches = (readInt(file), ShaderMesh(file))
+					else:
+						self.patches = None
+			
+			class LandClassManager:
+				class DecompressedBlock:
+					def __init__(self, file:BinBlock):
+						blockSz = readInt(file)
+						blockParamsCnt = readInt(file)
+
+						file.seek(blockSz - 4, 1) # block params
+
+				def __init__(self, file:BinBlock, cellCnt:int, name:str, filePath:str):
+					self.filePath = filePath
+					self.name = name
+
+					sz = readInt(file)
+					cnt = readInt(file)
+					sz2 = readInt(file)
+
+					# TODO: add simple name read function
+					nameLen = readInt(file)
+					name = file.read(nameLen)
+
+					file.seek(4 - nameLen % 4, 1)
+
+					log.log("Loading datablock")
+					log.addLevel()
+					self.datablock = loadDataBlock(file)
+					log.subLevel()
+
+					if cnt > 1:
+						log.log(f"Loading decompresed {cnt} blocks")
+						self.blocks = tuple(self.DecompressedBlock(file) for _ in range(cnt - 1))
+					else:
+						log.log("Landclass has no decompressed block")
+						self.blocks = None
+					
+					unknownHeaders = unpack("IIII", file.read(4 * 4))
+					unknownStruct = tuple(unpack("hh", file.read(4)) for _ in range(cellCnt))
+
+					log.log("Loading textures")
+					log.addLevel()
+
+					self.textures = tuple(self.__loadTexture__(file, i) for i in range(cellCnt))
+
+					log.subLevel()
+				
+				def __loadTexture__(self, file:BinBlock, idx:int):
+					unknown1 = readEx(3, file)
+					unknownVal = readEx(4, file, signed = True)
+
+					sz1 = readInt(file)
+					sz2 = readInt(file)
+					
+
+					return DDSx(self.filePath, f"{self.name}_lcls_{idx}", file = file.readBlock(sz1).read())
+
+			def __repr__(self):
+				return f"<LandMeshManager texCnt={self.texCnt} matCnt={self.matCnt} vdataCnt={self.vdataCnt}>"
+			
+			def __init__(self, file:BinBlock, cellCnt:int, name:str, filePath:str):
+				self.texCnt = readInt(file)
+				self.matCnt = readInt(file)
+				self.vdataCnt = readInt(file)
+				self.mvdHdrSz = readInt(file)
+
+				log.log(self)
+				
+				texMapSz = readInt(file)
+				texIndicesOfs = readInt(file)
+				texCnt = readInt(file)
+
+				file.seek(8, 1)
+
+				nameMapData = file.read(texIndicesOfs - 0x10)
+				nameMap = []
+
+				prev = readInt(file) - 0x10
+				
+				for i in range(texCnt):
+					next = texCnt == i + 1 and -1 or readInt(file) - 0x10
+					
+					nameMap.append(nameMapData[prev:next].decode("utf-8").rstrip("\x00"),)
+					
+					prev = next
+				
+				self.matVData = MatVData(CompressedData(file).decompressToBin(), name + ".lmesh", self.texCnt, self.matCnt)
+				
+				smBlock = file.readBlock(readInt(file))
+
+				log.log(f"Loading {cellCnt} cells")
+				log.addLevel()
+
+				self.cells = tuple(self.CellData(smBlock.readBlock(readInt(smBlock))) for _ in range(cellCnt))
+
+				log.subLevel()
+
+				cellBoundsBlock = smBlock.readBlock(readInt(smBlock))
+
+				log.log(f"Loading {cellCnt} cell bounds")
+				
+				self.cellBounds = tuple((unpack("fff", cellBoundsBlock.read(4 * 3)), unpack("fff", cellBoundsBlock.read(4 * 3))) for _ in range(cellCnt))
+				
+				log.log(f"Loading {cellCnt} cell bounding radiuses")
+				
+				self.cellBoundingsRadius = tuple(unpack("f", cellBoundsBlock.read(4))[0] for _ in range(cellCnt))
+
+				log.log(f"Loading land class manager")
+				log.addLevel()
+
+				self.landClasses = self.LandClassManager(file, cellCnt, name, filePath)
+
+				log.subLevel()
+
+		def __repr__(self):
+			return f"<LandMeshManager {self.mapSize[0]}x{self.mapSize[1]} ({self.cellCnt})>"
+		
+		def __init__(self, file:BinBlock, name:str, filePath:str):
+			magic = readInt(file)
+			version = readInt(file)
+
+			assert version == 4
+
+			self.gridCellSize, self.landCellSize = unpack("ff", file.read(8))
+			
+			self.mapSize = (readInt(file), readInt(file))
+			self.origin = unpack("ii", file.read(8))
+
+			hasTileData = readInt(file) > 0
+
+			meshOfs = readInt(file)
+			detailOfs = readInt(file)
+			tileDataOfs = readInt(file)
+			rayTracerOfs = readInt(file)
+
+			self.cellCnt = self.mapSize[0] * self.mapSize[1]
+
+			log.log(self)
+
+			log.log("Loading LandMesh")
+			log.addLevel()
+
+			self.lmesh = self.LandMesh(file, self.cellCnt, name, filePath)
+
+			log.subLevel()
+
+
 	def processBin(self, name:str, file:BinFile, absOfs:int):
 		if name == "RqRL":
 			sz = readInt(file)
@@ -411,155 +835,7 @@ class DagorBinaryLevelData(Exportable):
 		elif name == "TEX.":
 			pass
 		elif name == "lmap":
-			lndmMagic = file.read(4) # lndm: land materials
-			cnt = readInt(file)
-
-			sz1, sz2 = unpack("ff", file.read(4 * 2))
-			mapSizeX = readInt(file)
-			mapSizeY = readInt(file)
-			fuck1 = readInt(file)
-			fuck2 = readInt(file)
-			u0 = readInt(file)
-			u1 = readInt(file)
-			dataBlockOfs = readInt(file)
-			unknownOfs1 = readInt(file)
-			unknownOfs2 = readInt(file)
-			texCnt = readInt(file)
-			matCnt = readInt(file)
-			vdataCnt = readInt(file) # basically LOD count
-			unknownSz = readInt(file)
-
-			texBlockSz = readInt(file)
-
-			texSz = readInt(file)
-			texCnt = readInt(file)
-
-			self.cellCnt = mapSizeX * mapSizeY
-
-			file.seek(8, 1)
-			
-			log.log(f"cnt:		  {cnt}")
-			log.log(f"sz1:	      {sz1}")
-			log.log(f"sz2:	      {sz2}")
-			log.log(f"mapSizeX:   {mapSizeX}")
-			log.log(f"mapSizeY:   {mapSizeY}")
-			log.log(f"fuck1:      {hex(fuck1)}")
-			log.log(f"fuck2:      {hex(fuck2)}")
-			log.log(f"u0:         {u0}")
-			log.log(f"u1:         {u1}")
-			log.log(f"uOfs1:      {unknownOfs1}")
-			log.log(f"uOfs2:      {unknownOfs2}")
-			log.log(f"vdataCnt:   {vdataCnt}")
-			log.log(f"matCnt:     {matCnt}")
-			log.log(f"texSz:	  {texSz}")
-			log.log(f"texCnt:	  {texCnt}")
-
-			ofs = file.tell()
-
-			nameList = file.read(texSz - 0x10)
-			indexList = tuple(readInt(file) for i in range(texCnt))
-			
-			mMax = lambda x: -1 if x == texCnt else indexList[x] - indexList[0]
-
-			self.lndTex = tuple(formatMagic(nameList[indexList[k - 1] - indexList[0]:mMax(k)]) for k in range(1, texCnt + 1))
-
-			log.log(f"TexList @ +{ofs}:")
-
-			log.addLevel()
-
-			for k, v in enumerate(self.lndTex):
-				log.log(f"{k}:	{v}")
-			
-			log.subLevel()
-			
-			log.log(f"MVD @ +{file.tell()}")
-			
-			self.mvd = MatVData(CompressedData(file).decompressToBin(), self.getName(), filePath = self.getFilePath())
-			
-			ofs = file.tell()
-
-			shaderMesh = file.readBlock(readInt(file))
-
-			log.log(f"ResShaderMesh @ +{ofs}: ")
-			log.addLevel()
-
-			# nodeData = [{}]
-			
-			for i in range(self.cellCnt):
-				# log.log(f"Cell {i} @ +{file.tell()}:")
-				# log.addLevel()
-
-				block = BinFile(shaderMesh.read(readInt(shaderMesh)))
-
-				fBlock = BinFile(block.read(readInt(block)))
-
-				try:
-					landShaderMesh = tuple(ShaderMesh(fBlock) for i in range(2))
-				except Exception as e:
-					log.log(e, LOG_ERROR)
-					pass
-				
-				# for v in landShaderMesh:
-				# 	log.log(v)
-				
-				# nodeData[0][str(i)] = (landShaderMesh[0].startV, landShaderMesh[0].numV)
-				# log.subLevel()
-			# self.nodeData = nodeData
-			log.subLevel()
-
-
-			ofs = file.tell()
-
-			log.log(f"Datablock @ +{ofs}: ")
-			log.addLevel()
-			
-			blockSz = readInt(file)
-			blockCnt = readInt(file)
-			
-			log.log(f"blockSz:		{blockSz}")
-			log.log(f"blockCnt:		{blockCnt}")
-
-			for i in range(blockCnt):
-				log.log(f"MatBlk {i}:")
-				log.addLevel()
-
-				blkSz = readInt(file)
-				# nameSz = readInt(file)
-				name = self.readTexName(file)
-
-				log.log(f"name:		{name}")
-				log.log(f"blkSz:	{blkSz}")
-				
-				
-				ofs = file.tell()
-
-				log.log(f"blk @ +{ofs}:")
-				log.addLevel()
-
-				self.datablock = loadDataBlock(file)
-
-				# log.log("Shared namemap: ")
-				# log.addLevel()
-
-				# for k, v in enumerate(self.datablock.getSharedBlk().getSharedNameMap()):
-				# 	log.log(f"{k}: {v}")
-
-				# log.subLevel()
-
-				log.log("Debuged data: ")
-				log.addLevel()
-
-				for v in self.datablock.debug().split("\n"):
-					log.log(v)
-				
-				log.subLevel()
-
-				log.subLevel()
-				log.subLevel()
-
-			log.subLevel()
-
-			self.lastLandMeshOfs = absOfs + file.tell()
+			self.lmap = self.LandMeshManager(file, self.getName(), self.getFilePath())
 		elif name == "HM2":
 			# if True:
 			# 	return
@@ -585,23 +861,25 @@ class DagorBinaryLevelData(Exportable):
 			"""
 
 			sz = file.getSize()
+
+			self.riGenLayers:list[DagorBinaryLevelData.RendInstGenData] = []
 			
-			for i in range(1): # 2
-				log.log(f"Processing primary rigen layer {i}:")
+			for layerIdx in range(2):
+				layerName = "primary" if layerIdx == 0 else "secondary"
+
+				log.log(f"Processing {layerName} rigen layer:")
 				log.addLevel()
 
 				ofs = file.tell()
 
-				rigz = CompressedData(file)
-				dat = rigz.decompress(self.getName() + f"_main_{i}.rigz")
-
-				riGen = self.processBin("RIGzPrim", BinFile(pack("B", i) + dat), ofs + absOfs) # ADD ONE BYTE TO INDETIFY LAYER IDX
+				# riGen = self.processBin("RIGzPrim", BinFile(pack("B", layerIdx) + CompressedData(file).decompress(self.getName() + f"_{layerName}.rigz")), ofs + absOfs) # ADD ONE BYTE TO IDENTIFY LAYER IDX
+				riGen = self.processBin("RIGzPrim", BinFile(pack("B", layerIdx) + CompressedData(file).decompress()), ofs + absOfs) # ADD ONE BYTE TO IDENTIFY LAYER IDX
+				self.riGenLayers.append(riGen)
+				
+				riGen.processRiDataRel(file.readBlock(readInt(file)))
+				# riGen.processRiDataRel(file.readBlock(readInt(file)), self.getName(), layerName)
 
 				log.subLevel()
-
-				blockSz = readInt(file)
-				o = file.tell() 
-				
 
 				"""
 				subcells are decompressed as so:
@@ -625,29 +903,6 @@ class DagorBinaryLevelData(Exportable):
 
 				RendInstGenData::initRender
 				"""
-
-				log.log(f"Trying to decompress blocks @ {o} fullSz={blockSz}")
-				log.addLevel()
-				
-				i = 0
-				maxOfs = o + blockSz
-				
-
-				while o < maxOfs:
-					dat = CompressedData(file)
-					log.log(f"{i} found @ {o} sz={dat.cSz} cMethod={hex(dat.cMethod)}")
-					
-					if i == 0:
-						# self.processBin("RIGzSec", BinFile(dat.decompress()), 0) # 
-						dat.decompress(self.getName() + f"_sec_{i}.rigz")
-						
-					o = file.tell()
-					i += 1
-				
-				log.subLevel()
-
-				if file.tell() >= sz:
-					break
 		elif name == "SCN":
 			header = file.readBlock(56)
 
@@ -678,7 +933,7 @@ class DagorBinaryLevelData(Exportable):
 				riGen.sweepMask = RoHugeHierBitMap2d(file)
 			else:
 				riGen.sweepMask = 0
-
+				
 			for v in riGen.landClasses:
 				v.mask = RoHugeHierBitMap2d(file)
 			
@@ -777,10 +1032,6 @@ class DagorBinaryLevelData(Exportable):
 			faceIndices = tuple(readShort(file) for i in range(faceIndicesCnt))
 
 
-			
-
-
-
 	def __readFile__(self):
 		self.cdat = {}
 
@@ -827,6 +1078,8 @@ class DagorBinaryLevelData(Exportable):
 
 		i = 0
 
+		self.d3dresCnt = d3dresCnt
+
 		while file.tell() < fileSz:
 			# if True:
 			# 	break
@@ -841,7 +1094,7 @@ class DagorBinaryLevelData(Exportable):
 
 			log.addLevel()
 			
-			if name == "lmap":
+			if name == "RIGz":
 				self.processBin(name, dat, ofs)
 
 			log.subLevel()
@@ -883,6 +1136,229 @@ class DagorBinaryLevelData(Exportable):
 		file.close()
 
 		log.log("Overwrote")
+
+	def replacePregenCounters(self, riGenLayerIdx, data:bytes):
+		log.log("replacePregenCounters")
+
+		riGen:DagorBinaryLevelData.RendInstGenData = self.riGenLayers[riGenLayerIdx]
+		
+
+		newData = b""
+
+		for k, v in enumerate(riGen.entCnt):
+			if v.riResIdxLow == -1:
+				# riResIdxLow = 0
+				# riCount = 0
+				# riResIdxHigh = 0
+				riResIdxLow = 173 # 2**10 - 1 # v.riResIdxLow
+				riCount = v.riCount
+				riResIdxHigh = v.riResIdxHigh
+
+				newRaw = riResIdxLow + (riCount << 10) + (riResIdxHigh << 20)
+				
+				newData += pack("I", newRaw)
+			else:
+
+				# v.raw = 0xFF_FF_FF_00
+				newData += pack("I", v.raw)
+
+		return data[:riGen.entCntOfs + 4] + newData + data[(riGen.entCntOfs + 4) + len(riGen.entCnt) * 4:]
+
+	def replaceCellPregen(self, riGenLayerIdx, data:bytes):
+		log.log("replaceCellPregen")
+		log.addLevel()
+
+		riGen:DagorBinaryLevelData.RendInstGenData = self.riGenLayers[riGenLayerIdx]
+
+		empty = pack("65Q", *(587796 for _ in range(65)))
+		
+		for cell in riGen.cells:
+			if not cell.riDataRelOfs in riGen.riDataRel:
+				# log.log(f"Replacing pregen table for cell {cell.id}")
+				# ofs = 0x20 + riGen.cellsOfs + 4 +  cell.id * 0x228
+				
+				# data = data[:ofs] + empty + data[ofs + 0x208:]
+
+				continue
+		
+			if cell.id == 561:
+				log.log(f"Removing coverage count for cell {cell.id} @ {ofs}")
+				ofs = 4 + 4 + riGen.cellsOfs + (cell.id * 0x228)
+
+				data = data[:ofs] + pack("I", 0) + data[ofs + 4:]
+
+				
+				continue
+
+			ofs = 4 + 28 + riGen.cellsOfs + (cell.id * 0x228)
+
+			log.log(f"Removing riRelData offset for cell {cell.id} @ {ofs}")
+			
+			data = data[:ofs] + pack("I", 2**32 - 1) + data[ofs + 4:]
+			
+			del riGen.riDataRel[cell.riDataRelOfs]
+			cell.riDataRelOfs = None
+
+		log.log("RiGen ent cnt")
+		log.addLevel()
+
+		# for k, v in enumerate(riGen.entCnt):
+		# 	log.log(f"{k} {hex(v.raw)} {hex(v.riResIdxLow)}\t{hex(v.riCount)}\t{hex(v.riResIdxHigh)}\t\t{riGen.pregenEnts[v.riResIdxLow].riName}")
+
+		log.subLevel()
+		# file = open("test.dat", "wb")
+		# file.write(data)
+		# file.close()
+
+		log.subLevel()
+
+		return data
+
+	def replaceRIGz(self, ofs:int, primData:bytes = None):
+		log.log("Replacing RIGz")
+
+		f = open(self.getFilePath(), "rb")
+		data = f.read()
+		f.close()
+
+		sz = int.from_bytes(data[ofs:ofs + 4], "little")
+
+		oldRigz = BinFile(data[ofs + 8: ofs + 4 + sz])
+
+		cData = CompressedData(oldRigz)
+		rest = oldRigz.readRest()
+
+		if primData is None:
+			f = open("avg_abandoned_factory - Copy_primary.rigz", "rb")
+			primData = f.read()
+			f.close()
+
+		primData = self.replacePregenCounters(0, primData)
+		primData = self.replaceCellPregen(0, primData)
+		
+
+		# for v in self.rigz[0].cells:
+		# 	if v.riDataRelOfs != 0xFFFFFFFF:
+		# 		primData = primData[:v.ofs + 32] + pack("I", 0xFFFFFFFF) + primData[v.ofs + 32 + 4:]
+		
+		newRigz = compressBlock(primData, 0x80, 0)
+		
+		newRigz += rest
+
+		data = data[:ofs] + pack("I", len(newRigz) + 4) + data[ofs + 4:ofs + 8] + newRigz + data[ofs + 4 + sz:]
+		# data = data[ofs + 4 + sz:]
+
+		f = open("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory.bin", "wb")
+		f.write(data)
+		f.close()
+
+		log.log(f"Wrote {len(data)} to avg_abandoned_factory.bin")
+
+		return primData
+
+
+	def readCompressedBlock(self, file:BinFile):
+		sz = readEx(3, file)
+		cM = readByte(file)
+
+		file.seek(-4, 1)
+
+		return file.read(sz + 4)
+	
+	def replaceRIGzPregen(self, ofs:int, primLayer):
+		log.log("Replacing RIGz Pregen")
+
+		f = open(self.getFilePath(), "rb")
+		data = f.read()
+		f.close()
+
+		sz = int.from_bytes(data[ofs:ofs + 4], "little")
+
+		file = BinFile(data[ofs + 8: ofs + 4 + sz])
+		
+		if primLayer is None:
+			primLayer = CompressedData(file).decompress()
+		else:
+			CompressedData(file)
+
+		dataOfs = file.tell() + ofs + 8
+
+		riRelBlock = file.readBlock(readInt(file))
+
+		# for i in range(7, 8):
+		# 	primLayer, riRelBlock = self.replaceRiRelData(riRelBlock, i, primLayer)
+
+		# primLayer, riRelBlock = self.replaceRiRelData(riRelBlock, 5, primLayer)
+		primLayer, riRelBlock = self.replaceRiRelData(riRelBlock, 7, primLayer)
+
+		riRelBlock = BinFile(riRelBlock) if isinstance(riRelBlock, bytes) else riRelBlock
+
+		riRelData = riRelBlock.read()
+
+		primLayer = compressBlock(primLayer, 0x80)
+
+		newRigz = primLayer + pack("I", len(riRelData)) + riRelData + file.readRest()
+
+		data = data[:ofs] + pack("I", len(newRigz) + 4) + data[ofs + 4:ofs + 8] + newRigz + data[ofs + 4 + sz:]
+	
+		f = open("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory.bin", "wb")
+		f.write(data)
+		f.close()
+
+		log.log(f"Wrote {len(data)} to avg_abandoned_factory.bin @ {ofs + 8 + len(primLayer) + 4} (RIGz @ {ofs})")
+	
+	def replaceRiRelData(self, block:BinBlock, riRelIdx:int, primLayer:bytes):
+		if isinstance(block, bytes):
+			block = BinFile(block)
+		
+		block.seek(0, 0)
+
+		prevData = b""
+
+		for _ in range(riRelIdx - 1):
+			prevData += self.readCompressedBlock(block)
+		
+		log.log(f"Replacing riRel {riRelIdx - 6}") # @ {block.absTell()}")
+		log.addLevel()
+
+		oldBlockSz = len(self.readCompressedBlock(block))
+		ofsToCheck = block.tell()
+
+		# block = compressedBlock + block
+
+		f = open(f"avg_abandoned_factory - Copy_primary_{riRelIdx - 1}.pregen", "rb")
+
+		# newData = compressBlock(b"\x00" * len(f.read()), 0x40)
+		newData = compressBlock(f.read(), 0x40)
+
+		f.close()
+
+		riGen:DagorBinaryLevelData.RendInstGenData = self.riGenLayers[0]
+
+		newRiDataRelOfs = {}
+
+		for ofs in riGen.riDataRel:
+			cell = riGen.riDataRel[ofs]
+
+			if ofs < ofsToCheck:
+				newRiDataRelOfs[ofs] = cell
+
+				continue
+		
+			riRelDefOfs = 4 + riGen.cellsOfs + (cell.id) * 0x228 + 28
+			newRiRelOfs = (ofs - oldBlockSz) + len(newData)
+
+			newRiDataRelOfs[newRiRelOfs] = cell
+
+			log.log(f"Changing riRelOfs {ofs} -> {newRiRelOfs} for cell {cell.id} @ {riRelDefOfs} ")
+
+			primLayer = primLayer[:riRelDefOfs] + pack("I", newRiRelOfs) + primLayer[riRelDefOfs + 4:]
+
+		log.subLevel()
+
+		riGen.riDataRel = newRiDataRelOfs
+
+		return primLayer, prevData + newData + block.readRest()
 
 class LandClass(Exportable): # landclasses used to automatically generated planted and tiled areas on a map : it's useless for us
 	def __init__(self, filePath:str):
@@ -946,21 +1422,133 @@ class LandClass(Exportable): # landclasses used to automatically generated plant
 
 
 if __name__ == "__main__":
-	from pprint import pprint
+	import gameres
+	import os
+	# from assetcacher import ASSETCACHER
 
 	# map = Map("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\battle_of_berlin_opera - Copy.bin")
-	map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory - Copy.bin")
-	# map = Map("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\britain.bin")
-	# map = Map("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\air_afghan.bin")
+	map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory.bin")
+
+	# primData = None
+	# primData = map.replaceRIGz(11577184)
+	# map.replaceRIGzPregen(11577184, primData)
+
+	entities = {}
+	riGen = map.riGenLayers[0]
+
+	for ofs in riGen.riDataRel:
+		cell = riGen.riDataRel[ofs]
+
+		if cell.id != 561:
+			continue
+		
+		riGen.getCellEntities(cell.id, entities)
+		
+				
+	# file = open("samples/rigen.json", "w")
+	# file.write(json.dumps(entities, indent=4))
+	# file.close()
+
+	def exportEnts(map:DagorBinaryLevelData, entities):
+		gameRes:list[gameres.GameResourcePack] = []
+		
+		path = "C:/Program Files (x86)/Steam/steamapps/common/War Thunder/content/base/res/"
+
+		log.log(f"Loading GRP from {path}")
+		log.addLevel()
+
+		for file in os.listdir(path):
+			if os.path.splitext(file)[1] == ".grp":
+				gameRes.append(gameres.GameResourcePack(path + file))
+
+		log.subLevel()
+
+		for ent in entities:
+			if os.path.exists(f"samples/{ent}_0.obj"):
+				log.log(f"Skipping already exported model {ent}", LOG_WARN)
+
+				continue
+			
+			rrd = None
+
+			for grp in gameRes:
+				try:
+					rrd = grp.getResourceByName(ent)
+					break
+				except:
+					pass
+			
+			if rrd is None:
+				log.log(f"Could not find {ent} from our loaded gamerespacks", LOG_ERROR)
+				# raise Exception(f"Could not find {ent} from our loaded gamerespacks")
+
+				continue
+
+			level = log.curLevel
+			try:
+				ri = rrd.getChild()
+			except:
+				log.log(f"Failed to load RendInst {ent}", LOG_ERROR)
+				log.curLevel = level
+
+				continue
+
+
+			if isinstance(ri, gameres.RendInst):
+				try:
+					ri.exportObj(0, "samples")
+				except:
+					log.log(f"Failed to export {ent}", LOG_ERROR)
+			else:
+				log.log(f"Ignoring entity {ent}: rrd child returned a {ri}")
 	
-	# mvd = map.mvd
-	# mvd.computeData()
-	# mvd.quickExportVDataToObj(0)
-	# mvd.save()
+	# exportEnts(map, entities)
 
-	# mvd = map.sceneMVD
-	# mvd.computeData()
+	"""
+import bpy
+from json import loads
+from mathutils import Vector
 
-	# for i in range(mvd.getVDCount()):
-	# 	mvd.quickExportVDataToObj(i)
-	# lc = LandClass("samples/landc_pack/avg_abadoned_factory_detailed_biome.rrd")
+path = "C:/Users/Gredwitch/Documents/WTBS/DagorAssetExplorer/samples"
+
+file = open(f"{path}/rigen.json", "rb")
+entities = loads(file.read())
+file.close()
+
+objects = {}
+
+for ent in entities:
+    if len(entities[ent]) == 0:
+        print(f"Skipping {ent}")
+		
+        continue
+	
+	try:
+		imported_object = bpy.ops.import_scene.obj(filepath = f"{path}/{ent}_0.obj")
+		selected_object = bpy.context.selected_objects[0]
+		
+		objects[ent] = selected_object
+    except Exception as e:
+        print(f"Failed to import {ent}: {e}")
+		
+        continue
+	
+
+for entIdx, ent in enumerate(objects):
+    posTab = entities[ent]
+	selected_object = objects[ent]
+	
+    for k, pos in enumerate(posTab):
+        print(f"[{entIdx + 1}/{len(objects)}]: {ent} - Processing {k + 1}/{len(posTab)}") 
+		
+        new_object = selected_object.copy()
+        new_object.data = selected_object.data.copy()
+		
+        new_object.location = Vector(pos)
+		
+        bpy.context.collection.objects.link(new_object)
+    
+    bpy.data.objects.remove(selected_object)
+
+bpy.context.view_layer.update()
+	"""

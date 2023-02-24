@@ -43,59 +43,99 @@ class BinFile():
 		
 		self.__offset += bytes
 	
-	def write(self, data:bytes, offset:int = None):
-		if offset == None:
-			offset = self.tell()
-		
-		sz = len(data)
-
-		self.__data = self.__data[:offset] + data + self.__data[offset + sz:]
-	
-	def append(self, data:bytes, offset:int = None):
-		if offset == None:
-			offset = self.tell()
-		
-		self.__data = self.__data[:offset] + data + self.__data[offset:]
-
 	def getSize(self):
 		return self.__size
 
-	def readBlock(self, size:int):
+	def readBlock(self, size:int = None):
 		ofs = self.tell()
+
+		if size == None:
+			size = self.getSize() - ofs
 
 		self.seek(size, 1)
 
 		return BinBlock(self, ofs, size)
+
+	def readRest(self):
+		return self.read(self.getSize() - self.tell())
 
 	def quickSave(self, outName:str):
 		file = open(outName, "wb")
 		file.write(self.read())
 		file.close()
 	
+	def readEx(self, start:int, end:int):
+		return self.__data[start:end]
+
+	def delete(self, size:int):
+		fileSz = self.getSize()
+
+		if (size > fileSz):
+			raise ValueError("size to delete > fileSz")
+		
+		offset = self.tell()
+
+		self.__data = self.__data[:offset] + self.__data[offset + size:]
+
+		self.seek(max(offset - size, 0), 0)
+
+		self.__size -= size
+	
+	
+	def write(self, data:bytes):
+		offset = self.tell()
+		sz = len(data)
+
+		self.__data = self.__data[:offset] + data + self.__data[offset + sz:]
+
+		self.seek(sz, 1)
+	
+	def append(self, data:bytes):
+		offset = self.tell()
+		sz = len(data)
+
+		self.__data = self.__data[:offset] + data + self.__data[offset:]
+		self.__size += sz
+
+		self.seek(sz, 1)
+
+
 
 class BinBlock(BinFile): # guess who accidentally reinvented memoryview() :)
 	def __init__(self, parent:BinFile, offset:int, size:int):
-		# self.__parent = parent
-		self.__data = parent.getData()
+		self.__parent = parent
+		# self.__data = parent.getData()
 		self.__size = size
 		self.__offset = 0
 		self.__absOffset = offset
 		self.__maxAbsOffset = offset + size
 	
-	def readBlock(self, size:int):
+	def readBlock(self, size:int = None):
 		ofs = self.tell()
 
+		if size == None:
+			size = self.getSize() - ofs
+		
 		self.seek(size, 1)
 
 		return BinBlock(self, self.__absOffset + ofs, size)
 
 	def getData(self):
-		return self.__data
-
+		return self.__parent.getData()
+		# return self.__data
+	
+	def getParentBinFile(self):
+		if isinstance(self.__parent, BinFile):
+			return self.__parent
+		else:
+			return self.__parent.getParentBinFile()
+	
+	def getParent(self):
+		return self.__parent
 	
 	def read(self, bytes:int = None):
 		if bytes == None:
-			return self.__data[self.__absOffset:self.__maxAbsOffset]
+			return self.getData()[self.__absOffset:self.__maxAbsOffset]
 		else:
 			if self.__offset + bytes > self.__size:
 				raise Exception(f"Out of range: tried to read {bytes} at {self.__offset}, but file size is {self.__size}")
@@ -103,14 +143,17 @@ class BinBlock(BinFile): # guess who accidentally reinvented memoryview() :)
 			oldOffset = self.__offset
 			self.__offset += bytes
 
-			return self.__data[self.__absOffset + oldOffset:self.__absOffset + self.__offset]
+			return self.getData()[self.__absOffset + oldOffset:self.__absOffset + self.__offset]
 	
-	def readRest(self):
-		return self.read(self.getSize() - self.tell())
-
 	def tell(self):
 		return self.__offset
 	
+	def absTell(self):
+		return self.__absOffset + self.__offset
+	
+	def getAbsOffset(self):
+		return self.__absOffset
+
 	def seek(self, bytes:int, whence:int = 0):
 		if whence == 0:
 			self.__offset = 0
@@ -125,7 +168,7 @@ class BinBlock(BinFile): # guess who accidentally reinvented memoryview() :)
 	
 	def getSize(self):
 		return self.__size
-
+	
 
 def decodeVLQ(file:BinFile, step:int, end:int, breakCond = lambda val: val >= 0, shift:int = 1):
 	result = 0

@@ -11,6 +11,19 @@ struct Header {
 	
 	if (texCnt != 0xFFFFFFFF && matCnt != 0xFFFFFFFF) {
 		// retrive matt and tex data
+		u32 texMapSz;
+		u32 texIndicesOfs;
+		u32 texIndiciesCnt;
+		
+		padding[8];
+		
+		padding[texIndicesOfs - 0x10];
+		
+		u32 texMapIndicies[texIndiciesCnt];
+	}
+	
+	if (vdataNum == 0) {
+	   padding[0x20];
 	}
 };
 
@@ -42,7 +55,7 @@ struct OcclusionData {
 	
 	padding[4];
 	
-	float unknown1;
+	float lodDistance;
 	
 	padding[4];
 };
@@ -73,49 +86,8 @@ struct RigidObject {
 	
 };
 
-struct ShaderMeshElem {
-	u64 ShaderElementPtr;
-	u64 ShaderMaterialPtr;
-	u64 VertexDataPtr;
-	
-	u32 vdOrderIndex;
-	u32 startV;
-	u32 numV;
-	u32 startI;
-	u32 numFace;
-	u32 baseVertex;
-};
 
 
-#include <std/io.pat>
-struct ShaderMesh {
-	u32 elemOfs; // actually these are u64 dptr
-	u32 elemCnt;
-	
-	padding[8]; // u64 dcnt
-	
-	u16 stageEndElemIdx[8];
-	s32 __deprecatedMaxMatPass;
-	u32 _resv;
-	
-	
-	if (elemCnt > 0 && elemCnt < 100) { // safeguard for debug purposes
-		if (__deprecatedMaxMatPass < 0) {
-		   ShaderMeshElem elem[elemCnt];
-	   } else {
-		   ShaderMeshElem elem[elemCnt + stageEndElemIdx[2]];
-	   }
-	} else if (elemCnt > 100) {
-	   std::print("error @ {}", addressof(elemOfs));
-	}
-};
-
-
-struct ShaderMeshResource {
-	ShaderMesh mesh;
-	u32 resSz;
-	u32 _resv;
-};
 
 struct Lod {
 	u32 HdrSz;
@@ -185,7 +157,14 @@ struct ShaderSkinnedMeshResource {
 
 
 Header Hdr @ 0;
-CompressedData mvd @ sizeof(Hdr);
-ModelData modelData @ addressof(mvd) + sizeof(mvd);
+
+u32 offset = sizeof(Hdr);
+
+if (Hdr.vdataNum > 0) {
+    CompressedData mvd @ sizeof(Hdr);
+    
+    offset = addressof(mvd) + sizeof(mvd);
+}
+ModelData modelData @ offset;
 Lod lods[modelData.lodCnt] @ addressof(modelData) + sizeof(modelData);
-ShaderSkinnedMeshResource ssm @ addressof(lods) + sizeof(lods);
+// ShaderSkinnedMeshResource ssm @ addressof(lods) + sizeof(lods);

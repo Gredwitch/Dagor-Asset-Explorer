@@ -845,7 +845,7 @@ class MatVData(Exportable): # stores material and vertex data :D
 				meshopt = None
 
 				if meshopt == None:
-					log.log("Failed to load gdae_native.dll: some faces may be fucked", 1)
+					# log.log("Failed to load gdae_native.dll: some faces may be fucked", 1)
 
 					encodedSize = pSz - 0x5
 					faces = tuple(f for f in self.__decodeIndexSequence__(file.read(encodedSize), encodedSize, self))

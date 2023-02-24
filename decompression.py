@@ -1,23 +1,42 @@
-from ctypes import create_string_buffer
-from zstandard import ZstdCompressor, ZstdDecompressor
+from ctypes import create_string_buffer, c_void_p, c_int64, c_int, c_size_t
 from os import path
 from zlib import decompress as zlibdecompress
 from zlib import compress as zlibcompress
 from pylzma import decompress as lzmadecompress
 from pylzma import compress as lzmacompress
 from misc import loadDLL
+from struct import pack
 from fileread import *
 import log
 
-oodle6 = loadDLL("oo2core_6_win64.dll")
+dakernel = loadDLL("daKernel-dev.dll")
 
-if oodle6 == None:
-	print("Failed to load oo2core_6_win64.dll: Oodle compressed data will not be parsed (this applies to models and textures)")
+if dakernel == None:
+	print("Failed to load daKernel-dev.dll")
+else:
+	# size_t __fastcall oodle_compress(void *dst, unsigned __int64 maxDstSize, const void *src, unsigned __int64 srcSize, int compressionLevel)
 
-oodle3 = loadDLL("oo2core_3_win64.dll")
+	oodle_compress = dakernel[557]
+	oodle_compress.argtypes = c_void_p, c_int64, c_void_p, c_int64, c_int
+	oodle_compress.restype  = c_size_t
 
-if oodle3 == None:
-	print("Failed to load oo2core_3_win64.dll: compression to Oodle will not work")
+	# __int64 __fastcall oodle_decompress(void *dst, unsigned __int64 maxOriginalSize, const void *src, unsigned __int64 compressedSize)
+
+	oodle_decompress = dakernel[559]
+	oodle_decompress.argtypes = c_void_p, c_int64, c_void_p, c_int64
+	oodle_decompress.restype  = c_int64
+
+	# unsigned __int64 __fastcall zstd_compress(void *dst, unsigned __int64 maxDstSize, const void *src, unsigned __int64 srcSize, int compressionLevel)
+
+	zstd_compress = dakernel[928]
+	zstd_compress.argtypes = c_void_p, c_int64, c_void_p, c_int64, c_int
+	zstd_compress.restype  = c_int64
+
+	# unsigned __int64 __fastcall zstd_decompress(void *dst, unsigned __int64 maxOriginalSize, const void *src, unsigned __int64 srcSize)
+
+	zstd_decompress = dakernel[934]
+	zstd_decompress.argtypes = c_void_p, c_int64, c_void_p, c_int64
+	zstd_decompress.restype  = c_int64
 
 
 class CompressedData:
@@ -58,97 +77,110 @@ class CompressedData:
 	def decompressToBin(self):
 		return BinFile(self.decompress())
 
-
-def zstdDecompress(data:bytes):
-	return ZstdDecompressor().decompress(data)
-
-def zstdCompress(data:bytes):
-	return ZstdCompressor().compress(data)
-
-# def oodleDecompress(buffer:bytes,bufferSize:int = None):
-#     if bufferSize == None:
-#         bufferSize = toInt(buffer[:4])
-#         buffer = buffer[4:]
+def compressBlock(data:bytes, cMethod:int, level:int = None):
+	if cMethod == 0x40:
+		if level:
+			cData = zstdCompress(data, level)
+		else:
+			cData = zstdCompress(data)
+	elif cMethod == 0x60:
+		cData = zlibCompress(data)
+	elif cMethod == 0x20:
+		cData = lzmaCompress(data)
+	elif cMethod == 0x80:
+		if level:
+			cData = oodleCompress(data, level)
+		else:
+			cData = oodleCompress(data)
+	else:
+		raise ValueError(f"Unknown compression method {hex(cMethod)}")
 	
-#     outputBuffer = create_string_buffer(bufferSize)
+	return pack("<L", len(cData))[:3] + pack("<B", cMethod)[:1] + cData
 
-#     result = oodle.OodleLZ_Decompress(buffer,bufferSize,outputBuffer,bufferSize,-1, 0, 0, 0, 0, 0, 0, 0, 0, 3) # change bufferSize to len(buffer)
 
-#     if result == 0:
-#         raise Exception("Oodle error")
-		
-#     return outputBuffer.raw
-
-def oodleDecompress(data:bytes,dataLen:int = None,bufferSize:int = None):
-	if bufferSize == None:
-		bufferSize = toInt(data[:4])
-		data = data[4:]
+def oodleDecompress(src:bytes, maxOriginalSize:int = None):
+	if not maxOriginalSize:
+		maxOriginalSize = toInt(src[:4])
+		src = src[4:]
 	
-	if dataLen == None:
-		dataLen = len(data)
-	
-	decompressed_data = create_string_buffer(bufferSize)
+	compressedSize = len(src)
+	dst = create_string_buffer(maxOriginalSize)
 
-	res = oodle6.OodleLZ_Decompress(data,dataLen,
-									   decompressed_data,
-									   bufferSize, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-									   3)
-	if res == 0:
-		raise Exception("Oodle error")
-		
-	return decompressed_data.raw
-
-def oodleCompress(buffer:bytes,format:int = 0x6,level:int = 0x4,bufferSize:int = None):
-	# public enum OodleFormat : uint
-	# {
-	#     0x0,LZH,
-	#     0x1,LZHLW,
-	#     0x2,LZNIB,
-	#     0x3,None,
-	#     0x4,LZB16,
-	#     0x5,LZBLW,
-	#     0x6,LZA,
-	#     0x7,LZNA,
-	#     0x8,Kraken,
-	#     0x9,Mermaid,
-	#     0xA,BitKnit,
-	#     0xB,Selkie,
-	#     0xC,Akkorokamui
-	# }
-	# 
-	# public enum OodleCompressionLevel : ulong
-	# {
-	#     0x0,None,
-	#     0x1,SuperFast,
-	#     0x2,VeryFast,
-	#     0x3,Fast,
-	#     0x4,Normal,
-	#     0x5,Optimal1,
-	#     0x6,Optimal2,
-	#     0x7,Optimal3,
-	#     0x8,Optimal4,
-	#     0x9,Optimal5
-	# }
-
-	if bufferSize == None:
-		bufferSize = len(buffer)
-		
-	outputBuffer = create_string_buffer(bufferSize)
-
-	result = oodle3.OodleLZ_Compress(format,buffer,bufferSize,outputBuffer,level,0,0,0)
+	result = oodle_decompress(dst, maxOriginalSize, src, compressedSize)
 
 	if result == 0:
-		raise Exception("Oodle error")
+		raise Exception(f"Oodle error")
 	
-	data = outputBuffer.raw
+	return dst.raw
 
-	for i in range(len(data) - 1,-1,-1):
-		if data[i] != 0:
-			data = data[:i]
-			
-			break
+def oodleCompress(src:bytes, compressionLevel:int = 0x4):
+	# enum oo2::OodleLZ_CompressionLevel, copyof_254, signed, width 4 bytes
+	# 	OodleLZ_CompressionLevel_None  = 0
+	# 	OodleLZ_CompressionLevel_SuperFast  = 1
+	# 	OodleLZ_CompressionLevel_VeryFast  = 2
+	# 	OodleLZ_CompressionLevel_Fast  = 3
+	# 	OodleLZ_CompressionLevel_Normal  = 4
+	# 	OodleLZ_CompressionLevel_Optimal1  = 5
+	# 	OodleLZ_CompressionLevel_Optimal2  = 6
+	# 	OodleLZ_CompressionLevel_Optimal  = 6
+	# 	OodleLZ_CompressionLevel_Optimal3  = 7
+	# 	OodleLZ_CompressionLevel_Optimal4  = 8
+	# 	OodleLZ_CompressionLevel_Optimal5  = 9
+	# 	OodleLZ_CompressionLevel_Max  = 9
+	# 	OodleLZ_CompressionLevel_Count  = 0Ah
+	# 	OodleLZ_CompressionLevel_Force32  = 40000000h
+	# 	OodleLZ_CompressionLevel_Invalid  = 40000000h
+	# 	OodleLZ_CompressionLevel_HyperFast4  = -4
+	# 	OodleLZ_CompressionLevel_Min  = -4
+	# 	OodleLZ_CompressionLevel_HyperFast3  = -3
+	# 	OodleLZ_CompressionLevel_HyperFast2  = -2
+	# 	OodleLZ_CompressionLevel_HyperFast1  = -1
+	# 	OodleLZ_CompressionLevel_HyperFast  = -1
+
+	# NOTE : compressor = (compressionLevel / 10 > 0) ? OodleLZ_Compressor_Leviathan : OodleLZ_Compressor_Kraken
+	# NOTE : OodleLZLevel = compressionLevel % 10 (actual compression level)
+
+	srcSize = len(src)
+	maxDstSize = srcSize + 274 * ((srcSize + 0x3FFFF) // 0x40000) # OodleLZ_GetCompressedBufferSizeNeeded(srcSize)
+	dst = create_string_buffer(maxDstSize)
+
+	result = oodle_compress(dst, maxDstSize, src, srcSize, compressionLevel)
 	
-	return data
+	if result == 0:
+		raise Exception(f"Oodle error")
+	
+	return pack("I", srcSize) + dst.raw[:result]
+
+def zstdDecompressTest(src:bytes, maxOriginalSize:int = None):
+	if not maxOriginalSize:
+		maxOriginalSize = toInt(src[5:8])
+	
+	compressedSize = len(src)
+	dst = create_string_buffer(maxOriginalSize)
+
+	result = zstd_decompress(dst, maxOriginalSize, src, compressedSize)
+
+	if result == 0:
+		raise Exception(f"ZStandard error")
+	return dst.raw
+
+def zstdCompress(src:bytes, compressionLevel:int = 18):
+	srcSize = len(src)
+	maxDstSize = srcSize
+	dst = create_string_buffer(maxDstSize)
+
+	result = zstd_compress(dst, maxDstSize, src, srcSize, compressionLevel)
+	
+	if result == 0:
+		raise Exception(f"ZStandard error")
+	
+	return dst.raw[:result]
+
+from zstandard import ZstdDecompressor
+
+def zstdDecompress(src:bytes, maxOriginalSize:int = None):
+	return ZstdDecompressor().decompress(src)
+
 
 def zlibDecompress(data:bytes):
 	return zlibdecompress(data)
