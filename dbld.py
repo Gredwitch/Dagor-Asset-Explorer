@@ -367,8 +367,8 @@ class DagorBinaryLevelData(Exportable):
 
 			self.entCnt = tuple(self.PregEntCounter(file) for i in range(entCntNum))
 
-			# for k, v in enumerate(self.entCnt):
-			# 	log.log(f"{k}: {v}")
+			for k, v in enumerate(self.entCnt):
+				log.log(f"{k}: {v}")
 			
 			log.subLevel()
 			
@@ -444,23 +444,24 @@ class DagorBinaryLevelData(Exportable):
 
 			self.landClasses = []
 
-			for k in range(landClsCnt):
-				file.seek(landClsOfs + k * 32, 0)
+			if landClsCnt > 0:
+				for k in range(landClsCnt):
+					file.seek(landClsOfs + k * 32, 0)
 
-				v = self.LandClassRec(file)
+					v = self.LandClassRec(file)
+					
+					self.landClasses.append(v)
+
+					if k > 0:
+						prev = self.landClasses[k - 1]
+
+						file.seek(prev.landClassNameOfs, 0)
+
+						prev.landClassName = formatMagic(file.read(v.landClassNameOfs - prev.landClassNameOfs))
 				
-				self.landClasses.append(v)
+				file.seek(self.landClasses[-1].landClassNameOfs, 0)
 
-				if k > 0:
-					prev = self.landClasses[k - 1]
-
-					file.seek(prev.landClassNameOfs, 0)
-
-					prev.landClassName = formatMagic(file.read(v.landClassNameOfs - prev.landClassNameOfs))
-			
-			file.seek(self.landClasses[-1].landClassNameOfs, 0)
-
-			self.landClasses[-1].landClassName = formatMagic(file.read(landClsOfs - self.landClasses[-1].landClassNameOfs))
+				self.landClasses[-1].landClassName = formatMagic(file.read(landClsOfs - self.landClasses[-1].landClassNameOfs))
 			
 			# for k, v in enumerate(self.landClasses):
 			# 	log.log(f"{k}: {v}")
@@ -472,26 +473,27 @@ class DagorBinaryLevelData(Exportable):
 
 			self.pregenEnts:list[DagorBinaryLevelData.RendInstGenData.PregenEntPoolDesc] = []
 
-			for k in range(pregenEntCnt):
-				file.seek(pregenEntOfs + k * 32, 0)
+			if pregenEntCnt > 0:
+				for k in range(pregenEntCnt):
+					file.seek(pregenEntOfs + k * 32, 0)
 
-				v = self.PregenEntPoolDesc(file)
-				
-				self.pregenEnts.append(v)
-
-				if k > 0:
-					prev = self.pregenEnts[k - 1]
-
-					file.seek(prev.riNameOfs, 0)
+					v = self.PregenEntPoolDesc(file)
 					
-					prev.riName = formatMagic(file.read(v.riNameOfs - prev.riNameOfs))
-			
-			file.seek(self.pregenEnts[-1].riNameOfs, 0)
+					self.pregenEnts.append(v)
 
-			self.pregenEnts[-1].riName = formatMagic(file.read(size - self.pregenEnts[-1].riNameOfs))
+					if k > 0:
+						prev = self.pregenEnts[k - 1]
 
-			for k, v in enumerate(self.pregenEnts):
-				log.log(f"{k}: {v}")
+						file.seek(prev.riNameOfs, 0)
+						
+						prev.riName = formatMagic(file.read(v.riNameOfs - prev.riNameOfs))
+				
+				file.seek(self.pregenEnts[-1].riNameOfs, 0)
+
+				self.pregenEnts[-1].riName = formatMagic(file.read(size - self.pregenEnts[-1].riNameOfs))
+
+				for k, v in enumerate(self.pregenEnts):
+					log.log(f"{k}: {v}")
 			
 			log.subLevel()
 
@@ -506,7 +508,7 @@ class DagorBinaryLevelData(Exportable):
 
 				cell:DagorBinaryLevelData.RendInstGenData.Cell = self.riDataRel[riDataRelOfs]
 
-				log.log(f"Cell {cell.id}: RiDataRel {riDataRelIdx} @ {riDataRelOfs}")
+				log.log(f"Cell {cell.id}: RiDataRel {riDataRelIdx} @ {riDataRelOfs} [{cell}]")
 				log.addLevel()
 
 				file.seek(riDataRelOfs, 0)
@@ -521,7 +523,7 @@ class DagorBinaryLevelData(Exportable):
 				
 				log.subLevel()
 		
-		def getCellEntities(self, cellId:int, entities:dict[str, list[tuple[float, float, float, float]]] = {}):
+		def getCellEntities(self, cellId:int, entities:dict[str, list[tuple[float, float, float, float]]] = {}, enlisted:bool = False):
 			cell = self.cells[cellId]
 
 			log.log(f"Gathering entities for cell {cellId}")
@@ -530,8 +532,6 @@ class DagorBinaryLevelData(Exportable):
 			riData:BinFile = self.riDataRelFiles[cell.riDataRelOfs]
 			riData.seek(0, 0)
 			# riData.quickSave(f"abandoned_factory_0_{cellId}.rirel")
-
-			ofs = 0
 
 			x = cell.id % self.numCellW
 			z = cell.id // self.numCellW
@@ -561,6 +561,12 @@ class DagorBinaryLevelData(Exportable):
 				(0, 0, 0, 1),
 			)
 
+			# for v in (cell.entCnt):
+			# 	print(self.entCnt[v])
+			# if True:
+			# 	return
+
+			szAdd = self.perInstDataDwords * 4
 			
 			for i in range(65):
 				j = i + 1
@@ -573,35 +579,32 @@ class DagorBinaryLevelData(Exportable):
 					nextCnterIdx = cell.entCnt[j]
 
 				if entCnterIdx < nextCnterIdx:
-					log.log(f"{entCnterIdx=}")
+					log.log(f"{i} {entCnterIdx=}")
 					log.addLevel()
 
 					while True:
 						entCnter = self.entCnt[entCnterIdx]
-						ent = self.pregenEnts[entCnter.riResIdxLow]
+						riIdx = ((entCnter.raw >> 20) & 0xC00) | (entCnter.raw & 0x3FF) # hack
+
+						ent = self.pregenEnts[riIdx]
 
 						if not ent.riName in entities:
 							entities[ent.riName] = []
 						
 						entTab = entities[ent.riName]
 
-						log.log(f"@{ofs}\t{entCnter.riCount} x {ent.riName} ({ent.paletteRotationCount}, {ent.posInst})")
+						log.log(f"@{riData.tell():09d}\thigh={entCnter.riResIdxHigh} ({ent.paletteRotationCount}, {ent.posInst}) {entCnter.riCount:03d} x {riIdx:03d} [0x{entCnter.riCount:03x} x 0x{riIdx:03x}] val=0x{entCnter.raw:0x} {ent.riName}")
+
+						# v49 = 3 * riIdx
 
 						if ent.posInst == 0:
-							ofs += entCnter.riCount * 24
-
-							for k in range(entCnter.riCount):
-								block = riData.readBlock(24)
-											
-								block.seek(6, 0)
-
-								blockBytes = block.read()
-
-								# v110 = list(unpack("4h", blockBytes[0:8]))
-								# v112 = list(unpack("4h", blockBytes[8:0x10]))
-								# v114 = list(unpack("4h", blockBytes[0x10:0x18]))
-
-								array = unpack("12h", blockBytes)
+							for _ in range(entCnter.riCount):
+								if enlisted:
+									loadedData = riData.read(48 + szAdd)
+									array = tuple(unpack("h", loadedData[2 + (i * 4):4 + (i * 4)])[0] for i in range(12))
+								else:
+									loadedData = riData.read(24 + szAdd)
+									array = unpack("12h", loadedData[szAdd:szAdd + 24])
 
 								pos = tuple(cellOrigin[i] + array[(4 * (i + 1)) - 1] * v482[i] for i in range(3))
 								matrix = list(
@@ -614,29 +617,36 @@ class DagorBinaryLevelData(Exportable):
 								matrix.append((0, 0, 0, 1))
 
 								matrix = matrix_mul(scaleFix, matrix)
-								
-
-								# print(unpack("2I", v110))
-								
-								# getPos(dst, x, z, htDelta, self.grid2world, cell_xz_sz, self.cellSz, cellOrigin, cell.htMin, v110, v112, v114)
-								# log.log(f"{k} {(*dst, )}")
 
 								entTab.append(((pos[0], pos[2], pos[1]), matrix))
-								# print("\tDEST = ", *dst)
-						else:
-							ofs += entCnter.riCount * 8
 
-							riData.seek(entCnter.riCount * 8, 1)
+								# seek to (entCnter.riCount * (24 + szAdd)) - (entCnter.riCount - (2 * v49))
+						else:
+							for _ in range(entCnter.riCount):
+								loadedData = riData.read(8 + szAdd)
+								array = unpack("4h", loadedData[:8])
+								
+								entTab.append(((cellOrigin[0] + array[0] * v482[0], 
+												cellOrigin[2] + array[2] * v482[2], 
+												cellOrigin[1] + array[1] * v482[1]
+											), scaleFix))
+								
 
 						entCnterIdx += 1
 
 						if entCnterIdx >= nextCnterIdx:
 							break
+						
+						# if entCnter.riResIdxHigh > 0:
+							# entTab.pop()
+
+							# return entities
+					
 					log.subLevel()
-				
 				else:
+					log.log(f"{entCnterIdx}: loading from land class {self.entCnt[entCnterIdx]}")
 					... # load from land class
-			
+				
 			log.subLevel()
 
 			return entities
@@ -874,7 +884,17 @@ class DagorBinaryLevelData(Exportable):
 				ofs = file.tell()
 
 				# riGen = self.processBin("RIGzPrim", BinFile(pack("B", layerIdx) + CompressedData(file).decompress(self.getName() + f"_{layerName}.rigz")), ofs + absOfs) # ADD ONE BYTE TO IDENTIFY LAYER IDX
-				riGen = self.processBin("RIGzPrim", BinFile(pack("B", layerIdx) + CompressedData(file).decompress()), ofs + absOfs) # ADD ONE BYTE TO IDENTIFY LAYER IDX
+				try:
+					cData = CompressedData(file).decompress()
+				except:
+					break
+				
+				if cData is None:
+					break
+				
+				riGen = self.processBin("RIGzPrim", BinFile(pack("B", layerIdx) + cData), ofs + absOfs) # ADD ONE BYTE TO IDENTIFY LAYER IDX
+				riGen.ofs = ofs + absOfs
+				
 				self.riGenLayers.append(riGen)
 				
 				riGen.processRiDataRel(file.readBlock(readInt(file)))
@@ -1081,6 +1101,8 @@ class DagorBinaryLevelData(Exportable):
 
 		self.d3dresCnt = d3dresCnt
 
+		self.tags:dict[int, int] = {}
+
 		while file.tell() < fileSz:
 			# if True:
 			# 	break
@@ -1094,13 +1116,20 @@ class DagorBinaryLevelData(Exportable):
 			dat = file.readBlock(sz - 4)
 
 			log.addLevel()
+
+			iName = toInt(bName)
+
+			if iName in self.tags:
+				raise Exception(f"Tag {bName}={hex(iName)} already present in tags dict")
+			
+			self.tags[iName] = ofs
 			
 			if name == "RIGz":
 				self.processBin(name, dat, ofs)
 
 			log.subLevel()
 
-			if bName == b"\x00END":
+			if iName == TAG_END:
 				break
 			
 			i += 1
@@ -1165,13 +1194,13 @@ class DagorBinaryLevelData(Exportable):
 
 		return data[:riGen.entCntOfs + 4] + newData + data[(riGen.entCntOfs + 4) + len(riGen.entCnt) * 4:]
 
-	def replaceCellPregen(self, riGenLayerIdx, data:bytes):
+	def replaceCellPregen(self, riGenLayerIdx, data:bytes): # replace riRelDataOfs
 		log.log("replaceCellPregen")
 		log.addLevel()
 
 		riGen:DagorBinaryLevelData.RendInstGenData = self.riGenLayers[riGenLayerIdx]
 
-		empty = pack("65Q", *(587796 for _ in range(65)))
+		# empty = pack("65Q", *(587796 for _ in range(65)))
 		
 		for cell in riGen.cells:
 			if not cell.riDataRelOfs in riGen.riDataRel:
@@ -1182,11 +1211,11 @@ class DagorBinaryLevelData(Exportable):
 
 				continue
 		
-			if cell.id == 561:
-				log.log(f"Removing coverage count for cell {cell.id} @ {ofs}")
-				ofs = 4 + 4 + riGen.cellsOfs + (cell.id * 0x228)
+			if cell.id == 976:
+			# 	log.log(f"Removing coverage count for cell {cell.id} @ {ofs}")
+			# 	ofs = 4 + 4 + riGen.cellsOfs + (cell.id * 0x228)
 
-				data = data[:ofs] + pack("I", 0) + data[ofs + 4:]
+			# 	data = data[:ofs] + pack("I", 0) + data[ofs + 4:]
 
 				
 				continue
@@ -1200,13 +1229,14 @@ class DagorBinaryLevelData(Exportable):
 			del riGen.riDataRel[cell.riDataRelOfs]
 			cell.riDataRelOfs = None
 
-		log.log("RiGen ent cnt")
-		log.addLevel()
+		# log.log("RiGen ent cnt")
+		# log.addLevel()
 
 		# for k, v in enumerate(riGen.entCnt):
 		# 	log.log(f"{k} {hex(v.raw)} {hex(v.riResIdxLow)}\t{hex(v.riCount)}\t{hex(v.riResIdxHigh)}\t\t{riGen.pregenEnts[v.riResIdxLow].riName}")
 
-		log.subLevel()
+		# log.subLevel()
+
 		# file = open("test.dat", "wb")
 		# file.write(data)
 		# file.close()
@@ -1215,8 +1245,11 @@ class DagorBinaryLevelData(Exportable):
 
 		return data
 
-	def replaceRIGz(self, ofs:int, primData:bytes = None):
-		log.log("Replacing RIGz")
+	def replaceRIGz(self, outfile:str, primData:bytes = None):
+		ofs = self.riGenLayers[0].ofs - 8
+
+		log.log(f"Replacing RIGz @ {ofs}")
+		log.addLevel()
 
 		f = open(self.getFilePath(), "rb")
 		data = f.read()
@@ -1230,11 +1263,12 @@ class DagorBinaryLevelData(Exportable):
 		rest = oldRigz.readRest()
 
 		if primData is None:
-			f = open("avg_abandoned_factory - Copy_primary.rigz", "rb")
+			log.log(f"Loading primary layer from {self.getName()}_primary.rigz")
+			f = open(f"{self.getName()}_primary.rigz", "rb")
 			primData = f.read()
 			f.close()
 
-		primData = self.replacePregenCounters(0, primData)
+		# primData = self.replacePregenCounters(0, primData)
 		primData = self.replaceCellPregen(0, primData)
 		
 
@@ -1242,18 +1276,20 @@ class DagorBinaryLevelData(Exportable):
 		# 	if v.riDataRelOfs != 0xFFFFFFFF:
 		# 		primData = primData[:v.ofs + 32] + pack("I", 0xFFFFFFFF) + primData[v.ofs + 32 + 4:]
 		
-		newRigz = compressBlock(primData, 0x80, 0)
+		newRigz = compressBlock(primData, 0x40, 0)
 		
 		newRigz += rest
 
 		data = data[:ofs] + pack("I", len(newRigz) + 4) + data[ofs + 4:ofs + 8] + newRigz + data[ofs + 4 + sz:]
 		# data = data[ofs + 4 + sz:]
 
-		f = open("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory.bin", "wb")
+		f = open(outfile, "wb")
 		f.write(data)
 		f.close()
 
-		log.log(f"Wrote {len(data)} to avg_abandoned_factory.bin")
+		log.log(f"Wrote {len(data)} to {outfile}")
+
+		log.subLevel()
 
 		return primData
 
@@ -1266,8 +1302,30 @@ class DagorBinaryLevelData(Exportable):
 
 		return file.read(sz + 4)
 	
-	def replaceRIGzPregen(self, ofs:int, primLayer):
-		log.log("Replacing RIGz Pregen")
+	def removeTerrain(self, data:bytes):
+		log.log("Removing terrain")
+		log.addLevel()
+
+		lmapOfs = self.tags[TAG_LMAP] - 4	
+
+		log.log(f"Tag lmap @ {lmapOfs}")
+		data = data[:lmapOfs] + pack("I", 0x12_34_56_78) + data[lmapOfs + 4:]
+		
+		tags = (TAG_HM2, TAG_LNV3, TAG_LMP2)
+
+		for tag in tags:
+			ofs = self.tags[tag] - 4
+			log.log(f"Tag {data[ofs:ofs + 4]} @ {ofs}")
+			data = data[:ofs] + pack("I", 0x12_34_56_78) + data[ofs + 4:]
+
+		log.subLevel()
+
+		return data
+
+	def replaceRIGzLayerContents(self, toReplace, primLayer):
+		ofs = self.riGenLayers[0].ofs - 8
+
+		log.log(f"Replacing RIGz Pregen @ {ofs}")
 
 		f = open(self.getFilePath(), "rb")
 		data = f.read()
@@ -1290,23 +1348,25 @@ class DagorBinaryLevelData(Exportable):
 		# 	primLayer, riRelBlock = self.replaceRiRelData(riRelBlock, i, primLayer)
 
 		# primLayer, riRelBlock = self.replaceRiRelData(riRelBlock, 5, primLayer)
-		primLayer, riRelBlock = self.replaceRiRelData(riRelBlock, 7, primLayer)
+		primLayer, riRelBlock = self.replaceRiRelData(riRelBlock, 3, primLayer)
 
 		riRelBlock = BinFile(riRelBlock) if isinstance(riRelBlock, bytes) else riRelBlock
 
 		riRelData = riRelBlock.read()
 
-		primLayer = compressBlock(primLayer, 0x80)
+		primLayer = compressBlock(primLayer, 0x40)
 
 		newRigz = primLayer + pack("I", len(riRelData)) + riRelData + file.readRest()
 
 		data = data[:ofs] + pack("I", len(newRigz) + 4) + data[ofs + 4:ofs + 8] + newRigz + data[ofs + 4 + sz:]
+
+		data = self.removeTerrain(data)
 	
-		f = open("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory.bin", "wb")
+		f = open(toReplace, "wb")
 		f.write(data)
 		f.close()
 
-		log.log(f"Wrote {len(data)} to avg_abandoned_factory.bin @ {ofs + 8 + len(primLayer) + 4} (RIGz @ {ofs})")
+		log.log(f"Wrote {len(data)} to {toReplace} @ {ofs + 8 + len(primLayer) + 4} (RIGz @ {ofs})")
 	
 	def replaceRiRelData(self, block:BinBlock, riRelIdx:int, primLayer:bytes):
 		if isinstance(block, bytes):
@@ -1316,10 +1376,10 @@ class DagorBinaryLevelData(Exportable):
 
 		prevData = b""
 
-		for _ in range(riRelIdx - 1):
+		for _ in range(riRelIdx):
 			prevData += self.readCompressedBlock(block)
 		
-		log.log(f"Replacing riRel {riRelIdx - 6}") # @ {block.absTell()}")
+		log.log(f"Replacing riRel {riRelIdx}") # @ {block.absTell()}")
 		log.addLevel()
 
 		oldBlockSz = len(self.readCompressedBlock(block))
@@ -1327,7 +1387,7 @@ class DagorBinaryLevelData(Exportable):
 
 		# block = compressedBlock + block
 
-		f = open(f"avg_abandoned_factory - Copy_primary_{riRelIdx - 1}.pregen", "rb")
+		f = open(f"normandy_3_976.rirel", "rb")
 
 		# newData = compressBlock(b"\x00" * len(f.read()), 0x40)
 		newData = compressBlock(f.read(), 0x40)
@@ -1338,15 +1398,21 @@ class DagorBinaryLevelData(Exportable):
 
 		newRiDataRelOfs = {}
 
-		for ofs in riGen.riDataRel:
+		for idx, ofs in enumerate(riGen.riDataRel):
 			cell = riGen.riDataRel[ofs]
+
+			if idx == riRelIdx:
+				log.log(f"Removing coverage count for cell {cell.id} @ {ofs}")
+				coverageOfs = 4 + riGen.cellsOfs + (cell.id * 0x228) + 4
+
+				primLayer = primLayer[:coverageOfs] + pack("I", 0) + primLayer[coverageOfs + 4:]
 
 			if ofs < ofsToCheck:
 				newRiDataRelOfs[ofs] = cell
 
 				continue
 		
-			riRelDefOfs = 4 + riGen.cellsOfs + (cell.id) * 0x228 + 28
+			riRelDefOfs = 4 + riGen.cellsOfs + (cell.id * 0x228) + 28
 			newRiRelOfs = (ofs - oldBlockSz) + len(newData)
 
 			newRiDataRelOfs[newRiRelOfs] = cell
@@ -1427,33 +1493,41 @@ if __name__ == "__main__":
 	import os
 	# from assetcacher import ASSETCACHER
 
-	# map = Map("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\battle_of_berlin_opera - Copy.bin")
-	map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_abandoned_factory.bin")
+	map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_coastal_area_1x1 - Copy.bin")
+	# map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\battle_of_berlin_opera.bin")
+	# map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_normandy.bin")
 
-	# primData = None
-	# primData = map.replaceRIGz(11577184)
-	# map.replaceRIGzPregen(11577184, primData)
+	primData = None
+	toReplace = "D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_coastal_area_1x1.bin"
+	# primData = map.replaceRIGz(toReplace, primData)
+	# map.replaceRIGzLayerContents(toReplace, primData)
 
-	entities = {}
-	riGen = map.riGenLayers[0]
+	def exportRiGen(map:DagorBinaryLevelData, write:bool):
+		entities = {}
+		riGen = map.riGenLayers[0]
 
-	for ofs in riGen.riDataRel:
-		cell = riGen.riDataRel[ofs]
+		for ofs in riGen.riDataRel:
+			cell = riGen.riDataRel[ofs]
+			
+			# if cell.id != 976:
+			# 	continue
 
-		# if cell.id != 561:
-		# 	continue
-		
-		riGen.getCellEntities(cell.id, entities)
-		
-				
-	file = open("samples/rigen.json", "w")
-	file.write(json.dumps(entities, indent=4))
-	file.close()
+			riGen.getCellEntities(cell.id, entities, True)
+			
+		if write:
+			file = open("samples/rigen.json", "w")
+			file.write(json.dumps(entities, indent=4))
+			file.close()
+
+			log.log("Wrote samples/rigen.json")
+
+		return entities
 
 	def exportEnts(map:DagorBinaryLevelData, entities):
 		gameRes:list[gameres.GameResourcePack] = []
 		
 		path = "C:/Program Files (x86)/Steam/steamapps/common/War Thunder/content/base/res/"
+		# path = "D:/OldWindows/Users/Gredwitch/AppData/Local/Enlisted/content/base/res/"
 
 		log.log(f"Loading GRP from {path}")
 		log.addLevel()
@@ -1503,58 +1577,93 @@ if __name__ == "__main__":
 			else:
 				log.log(f"Ignoring entity {ent}: rrd child returned a {ri}")
 	
+	entities = exportRiGen(map, True)
 	# exportEnts(map, entities)
+
+	log.log("Done")
 
 	"""
 import bpy
+import bmesh
 from json import loads
 from mathutils import Vector, Matrix
 
-import bpy
-from json import loads
-from mathutils import Vector
+MERGE_DISTANCE = 0.001
+DECIMATE_RATIO = 0.4
 
-path = "C:/Users/Gredwitch/Documents/WTBS/DagorAssetExplorer/samples"
-
-file = open(f"{path}/rigen.json", "rb")
-entities = loads(file.read())
-file.close()
-
-objects = {}
-
-for ent in entities:
-    if len(entities[ent]) == 0:
-        print(f"Skipping {ent}")
+def placeInstances(riGen, entities):
+    for entIdx, ent in enumerate(entities):
+        transformTab = riGen[ent]
+        selected_object = entities[ent]
         
-        continue
+        for k, transform in enumerate(transformTab):
+            print(f"[D] [{entIdx + 1}/{len(entities)}]: {ent} - Processing {k + 1}/{len(transformTab)}") 
+            
+            new_object = selected_object.copy()
+            new_object.data = selected_object.data.copy()
+            
+            new_object.matrix_world @= Matrix(transform[1])
+            new_object.location = Vector(transform[0])
+            
+            bpy.context.collection.objects.link(new_object)
+        
+        bpy.data.objects.remove(selected_object)
+
+def optimizeObject(obj):
+    print("[D] \tOptimizing")
     
-    try:
-        imported_object = bpy.ops.import_scene.obj(filepath = f"{path}/{ent}_0.obj")
-        selected_object = bpy.context.selected_objects[0]
-        
-        objects[ent] = selected_object
-    except Exception as e:
-        print(f"Failed to import {ent}: {e}")
-        
-        continue
+    bpy.context.view_layer.objects.active = obj
+    
+    bpy.ops.object.mode_set(mode = "EDIT")
+    
+    bm = bmesh.from_edit_mesh(obj.data)
+    bmesh.ops.remove_doubles(bm, verts = bm.verts, dist = MERGE_DISTANCE)
+    bmesh.update_edit_mesh(obj.data)
+    
+    bpy.ops.object.mode_set(mode = "OBJECT")
+    
+    decimateMod = obj.modifiers.new(name = "Decimate", type = "DECIMATE")
+    decimateMod.ratio = DECIMATE_RATIO
+    
+    bpy.ops.object.modifier_apply(modifier = decimateMod.name)
     
 
-for entIdx, ent in enumerate(objects):
-    transformTab = entities[ent]
-    selected_object = objects[ent]
-    
-    for k, transform in enumerate(transformTab):
-        print(f"[{entIdx + 1}/{len(objects)}]: {ent} - Processing {k + 1}/{len(transformTab)}") 
-        
-        new_object = selected_object.copy()
-        new_object.data = selected_object.data.copy()
-        
-        new_object.matrix_world @= Matrix(transform[1])
-        new_object.location = Vector(transform[0])
-        
-        bpy.context.collection.objects.link(new_object)
-    
-    bpy.data.objects.remove(selected_object)
+def loadEntities(riGen, path:str):
+    entities = {}
 
-bpy.context.view_layer.update()
+    for k, ent in enumerate(riGen):
+        print(f"Loading entity {k + 1}/{len(riGen)}")
+        
+        if len(riGen[ent]) == 0:
+            print(f"[D] \tSkipping {ent}")
+            
+            continue
+        
+        try:
+            imported_object = bpy.ops.import_scene.obj(filepath = f"{path}/{ent}_0.obj")
+            selected_object = bpy.context.selected_objects[0]
+            
+            entities[ent] = selected_object
+        except Exception as e:
+            print(f"[E] \tFailed to import {ent}: {e}")
+            
+            continue
+        
+            
+        optimizeObject(entities[ent])
+    
+    return entities
+
+def loadRiGen(path:str):
+    file = open(f"{path}/rigen.json", "rb")
+    riGen = loads(file.read())
+    file.close()
+
+    entities = loadEntities(riGen, path)
+    placeInstances(riGen, entities)
+    
+    bpy.context.view_layer.update()
+
+
+loadRiGen("C:/Users/Gredwitch/Documents/WTBS/DagorAssetExplorer/samples")
 	"""
