@@ -2,6 +2,14 @@
 #include <std/mem.pat>
 #include <std/io.pat>
 
+fn abs(s32 a) {
+    if (a < 0)
+        return -a;
+    else
+        return a;
+    
+};
+
 namespace MVD {
 	struct Material {
 		padding[0x40];
@@ -57,7 +65,7 @@ namespace MVD {
 
 	Header Hdr @ 0;
 
-	char matData[Hdr.matOffset - 0x20] @ sizeof(Hdr);
+	char matData[abs(Hdr.matOffset - 0x20)] @ sizeof(Hdr);
 	Material materials[Hdr.matCount] @ Hdr.matOffset;
-	LODInfo lodInfo[Hdr.lodCount] @ Hdr.lodOffset;
+	VertexData vertexData[Hdr.lodCount] @ Hdr.lodOffset;
 }

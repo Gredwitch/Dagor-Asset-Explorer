@@ -523,7 +523,7 @@ class DagorBinaryLevelData(Exportable):
 				
 				log.subLevel()
 		
-		def getCellEntities(self, cellId:int, entities:dict[str, list[tuple[float, float, float, float]]] = {}, enlisted:bool = False):
+		def getCellEntities(self, cellId:int, entities:dict[str, list[tuple[float, float, float, float]]] = {}, enlisted:bool = False, vegetation:bool = False):
 			cell = self.cells[cellId]
 
 			log.log(f"Gathering entities for cell {cellId}")
@@ -624,12 +624,14 @@ class DagorBinaryLevelData(Exportable):
 						else:
 							for _ in range(entCnter.riCount):
 								loadedData = riData.read(8 + szAdd)
-								array = unpack("4h", loadedData[:8])
-								
-								entTab.append(((cellOrigin[0] + array[0] * v482[0], 
-												cellOrigin[2] + array[2] * v482[2], 
-												cellOrigin[1] + array[1] * v482[1]
-											), scaleFix))
+
+								if vegetation:
+									array = unpack("4h", loadedData[:8])
+									
+									entTab.append(((cellOrigin[0] + array[0] * v482[0], 
+													cellOrigin[2] + array[2] * v482[2], 
+													cellOrigin[1] + array[1] * v482[1]
+												), scaleFix))
 								
 
 						entCnterIdx += 1
@@ -1493,30 +1495,30 @@ if __name__ == "__main__":
 	import os
 	# from assetcacher import ASSETCACHER
 
-	map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_coastal_area_1x1 - Copy.bin")
+	map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_urban_area_2x2.bin")
 	# map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\battle_of_berlin_opera.bin")
 	# map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_normandy.bin")
 
-	primData = None
-	toReplace = "D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_coastal_area_1x1.bin"
+	# primData = None
+	# toReplace = "D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_coastal_area_1x1.bin"
 	# primData = map.replaceRIGz(toReplace, primData)
 	# map.replaceRIGzLayerContents(toReplace, primData)
 
-	def exportRiGen(map:DagorBinaryLevelData, write:bool):
+	def exportRiGen(map:DagorBinaryLevelData, write:bool = True, enlisted:bool = False, vegetation:bool = True, cells:tuple = None):
 		entities = {}
 		riGen = map.riGenLayers[0]
 
 		for ofs in riGen.riDataRel:
 			cell = riGen.riDataRel[ofs]
 			
-			# if cell.id != 976:
-			# 	continue
+			if cells is not None and cell.id not in cells:
+				continue
 
-			riGen.getCellEntities(cell.id, entities, True)
+			riGen.getCellEntities(cell.id, entities, enlisted, vegetation)
 			
 		if write:
 			file = open("samples/rigen.json", "w")
-			file.write(json.dumps(entities, indent=4))
+			file.write(json.dumps(entities, indent = 4))
 			file.close()
 
 			log.log("Wrote samples/rigen.json")
@@ -1577,8 +1579,8 @@ if __name__ == "__main__":
 			else:
 				log.log(f"Ignoring entity {ent}: rrd child returned a {ri}")
 	
-	entities = exportRiGen(map, True)
-	# exportEnts(map, entities)
+	entities = exportRiGen(map, write = True, enlisted = True, vegetation = False, cells = (528, ))
+	exportEnts(map, entities)
 
 	log.log("Done")
 

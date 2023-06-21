@@ -1154,6 +1154,8 @@ class GameResourcePack(Exportable): # may need cleanup / TODO: rewrite like DXP2
 				elif self.__classId == 0x56f81b6d:
 					# child = SkeletonLegacy(self.getBin())
 					child = GeomNodeTree(self.getBin())
+				elif self.__classId == 0xACE50000:
+					child = CollisionGeom(self.getName(), self.getBin())
 				else:
 					log.log(f"Unimplemented class {hex(self.__classId)}",2)
 
@@ -1384,14 +1386,106 @@ class GameResourcePack(Exportable): # may need cleanup / TODO: rewrite like DXP2
 		return f"realResDataOfs1={ofs} realResDataOfs2={ofs + realResId * 0x18}"
 
 
+class CollisionGeom(Exportable):
+	def __init__(self, name:str, file:BinFile):
+		self.setName(name)
+
+		self.__readFile__(file)
+	
+	def __readHeader__(self, file:BinFile):
+		magic = readInt(file)
+		unknown = readInt(file)
+
+		dataSz = readInt(file)
+
+		file.seek(dataSz, 1)
+
+		fileSz = readInt(file)
+
+		hasNodes = readInt(file)
+
+		if hasNodes == 2:
+			self.__nodeCnt = readInt(file)
+		elif hasNodes == 1:
+			self.__nodeCnt = 1
+		else:
+			raise Exception(f"CollisionGeom {hasNodes=}")
+
+	class CollNode(Exportable):
+		def __init__(self, file:BinFile):
+			name = file.read(readInt(file)).decode("utf-8")
+
+			file.seek(2, 1)
+
+			sz = readInt(file)
+
+			if sz > 0:
+				self.__className = name
+				self.setName(file.read(sz).decode("utf-8"))
+
+				file.seek(2, 1)
+			else:
+				self.setName(name)
+
+			file.seek(96, 1)
+
+			self.__verts:tuple[tuple[float, float, float]] = tuple(unpack("3f", file.read(12)) for _ in range(readInt(file)))
+			self.__faces:tuple[tuple[int, int, int]] = tuple(unpack("3I", file.read(12)) for _ in range(readInt(file) // 3))
+
+		def getVerts(self):
+			return self.__verts
+	
+		def getFaces(self):
+			return self.__faces
+
+	def __readFile__(self, file:BinFile):
+		self.__readHeader__(file)
+
+		self.__nodes = tuple(CollisionGeom.CollNode(file) for _ in range(self.__nodeCnt))
+	
+	def getObj(self):
+		obj = ""
+
+		vOfs = 0
+
+		for node in self.__nodes:
+			verts = node.getVerts()
+
+			for v in verts:
+				obj += f"v {v[0]:.4f} {v[2]:.4f} {v[1]:.4f}\n"
+				obj += f"vt 0.0 0.0\n"
+			
+			for f in node.getFaces():
+				obj += "f"
+
+				for idx in f:
+					idx += 1 + vOfs
+
+					obj += f" {idx}/{idx}"
+				
+				obj += "\n"
+
+			vOfs += len(verts)
+			
+		return obj
+
+	def exportObj(self, path:str = getcwd()):
+		obj = self.getObj()
+
+		file = open(f"{path}/{self.getName()}.obj", "w")
+		file.write(obj)
+		file.close()
+
+
 if __name__ == "__main__":
 	from assetcacher import ASSETCACHER
 	import material
-
+	import trimesh
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\pilots.grp")
-	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp.old")
+	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\collision_pack.grp")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\nvrsk_buildings.grp")
-	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\abandoned_factory.grp")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\abandoned_factory.grp")
 
 	# ASSETCACHER.appendGameResDesc(GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin"))
 
@@ -1403,16 +1497,26 @@ if __name__ == "__main__":
 	# 			ASSETCACHER.cacheAsset(ddsx)
 	# loadDXP("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.dxp.bin")
 	# loadDXP("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\hq_tex\\res\\hq_tex_cars_ri.dxp.bin")
-
-	# rrd = grp.getResourceByName("peugeot_402")
+	
+	# grp.getAllRealResources()
+	# rrd = grp.getResourceByName("c")
 	# rrd = grp.getResourceByName("pzkpfw_IV_ausf_F")
 	# rrd = grp.getResourceByName("pilot_china1")
-	rrd = grp.getResourceByName("af_central_building")
+	# rrd = grp.getResourceByName("af_central_building")
+	rrd = grp.getResourceByName("normandy_village_house_2_floor_d_collision")
+	# rrd = grp.getResourceByName("chevrolet_150_a_collision")
+	# rrd = grp.getResourceByName("pzkpfw_IV_ausf_F_collision")
 	# rrd.save()
 	# print(rrd.getOffset())
-	ri:RendInst = rrd.getChild()
+	ri:CollisionGeom = rrd.getChild()
+	ri.exportObj()
+
+	mesh = trimesh.load_mesh(rrd.getName() + ".obj", "obj")
+	# col = trimesh.interfaces.vhacd.convex_decomposition(mesh)
+
+	print(col)
 	# ri.getMatVData().save()
 	# ri.setMaterials(ASSETCACHER.getModelMaterials(rrd.getName()))
 	# rrd.save()
-	ri.exportObj(0)
+	# ri.exportObj(0)
 	

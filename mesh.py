@@ -695,29 +695,29 @@ class MatVData(Exportable): # stores material and vertex data :D
 					self.__unimplemented = True
 					file.seek(vCnt * vStride,1)
 			elif format == 2:
-				# if vStride == 16:
-				# 	stride = vStride - 16
+				if vStride == 16:
+					stride = vStride - 16
 
-				# 	for i in SafeRange(self, vCnt):
-				# 		verts.append(self.__unpackVertex__(file))
+					for i in SafeRange(self, vCnt):
+						verts.append(self.__unpackVertex__(file))
 
-				# 		UVs.append(self.__unpackShortUV__(file))
+						UVs.append(self.__unpackShortUV__(file))
 
-				# 		file.seek(stride, 1)
+						file.seek(stride, 1)
 				# elif vStride == 12:
-				stride = vStride - 10
-				shortVerts = True
+				# shortVerts = True
 
-				for i in SafeRange(self, vCnt):
-					verts.append(self.__unpackShortVertex__(file))
+				# for i in SafeRange(self, vCnt):
+				# 	verts.append(self.__unpackVertex__(file))
+				# 	# verts.append(self.__unpackShortVertex__(file))
 
-					UVs.append(self.__unpackShortUV__(file))
+				# 	UVs.append(self.__unpackShortUV__(file))
 
-					file.seek(stride, 1)
-				# else:
-				# 	log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
+				# 	file.seek(stride, 1)
+				else:
+					log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
 
-					# self.__unimplemented = True
+					self.__unimplemented = True
 			elif format == 5:
 				if vStride == 24:
 					shortVerts = True
