@@ -1,8 +1,8 @@
-from io import BufferedReader, TextIOWrapper
-from typing import overload
+from io import BufferedReader
+# from terminable import Terminable
 
 
-class BinFile():
+class BinFile(BufferedReader):
 	def __init__(self, data:bytes):
 		if type(data) == str:
 			file = open(data, "rb")
@@ -81,6 +81,8 @@ class BinFile():
 
 		self.__size -= size
 	
+	def isClosed(self):
+		return self.getData() is None
 	
 	def write(self, data:bytes):
 		offset = self.tell()
@@ -98,6 +100,11 @@ class BinFile():
 		self.__size += sz
 
 		self.seek(sz, 1)
+
+	def close(self):
+		self.__data = None
+		self.__size = 0
+		self.__offset = 0
 
 
 
@@ -189,75 +196,42 @@ def toInt(data:bytes):
 
 # TODO: move all this to the BinFile class and make the BinFile a wrapper for BufferedReaders
 
-@overload
-def readEx(bytes:int,file:BufferedReader) -> int: ...
-
-@overload
-def readEx(bytes:int,file:BinFile) -> int: ...
 
 
-def readEx(bytes, file, signed = False):
+def readEx(bytes:int, file:BufferedReader, signed = False):
 	return int.from_bytes(file.read(bytes),"little", signed=signed)
 
 
-@overload
-def readByte(file:TextIOWrapper) -> int: ...
-
-@overload
-def readByte(file:BufferedReader) -> int: ...
-
-@overload
-def readByte(file:BinFile) -> int: ...
-
-def readByte(file):
+def readByte(file:BufferedReader) -> int:
 	return readEx(1,file)
 
+def readNameMap(file:BufferedReader, cnt:int, indicesOfs:int, ofs:int, parent = None, longs = False) -> list[str]:
+	nameMapData = file.read(indicesOfs - file.tell())
 
-@overload
-def readShort(file:TextIOWrapper) -> int: ...
+	nameMap = []
 
-@overload
-def readShort(file:BufferedReader) -> int: ...
+	rangeFunc = (lambda x: parent.SafeRange(parent, x)) if parent is not None else (lambda x: range(x))
+	readFunc = (lambda x: readLong(x)) if longs else (lambda x: readInt(x))
 
-@overload
-def readShort(file:BinFile) -> int: ...
+	prev = readFunc(file) - ofs
 
-def readShort(file):
+	for i in rangeFunc(cnt):
+		next = -1 if cnt == i + 1 else readFunc(file) - ofs
+		
+		nameMap.append(nameMapData[prev:next].decode("utf-8").rstrip("\x00"),)
+		
+		prev = next
+	
+	return nameMap
+
+def readShort(file:BufferedReader) -> int:
 	return readEx(2,file)
 
-@overload
-def readSignedShort(file:TextIOWrapper) -> int: ...
-
-@overload
-def readSignedShort(file:BufferedReader) -> int: ...
-
-@overload
-def readSignedShort(file:BinFile) -> int: ...
-
-def readSignedShort(file):
+def readSignedShort(file:BufferedReader) -> int:
 	return readEx(2,file, signed = True)
 
-@overload
-def readInt(file:TextIOWrapper) -> int: ...
-
-@overload
-def readInt(file:BufferedReader) -> int: ...
-
-@overload
-def readInt(file:BinFile) -> int: ...
-
-def readInt(file):
+def readInt(file:BufferedReader) -> int:
 	return readEx(4,file)
 
-
-@overload
-def readLong(file:TextIOWrapper) -> int: ...
-
-@overload
-def readLong(file:BufferedReader) -> int: ...
-
-@overload
-def readLong(file:BinFile) -> int: ...
-
-def readLong(file):
+def readLong(file:BufferedReader) -> int:
 	return readEx(8,file)

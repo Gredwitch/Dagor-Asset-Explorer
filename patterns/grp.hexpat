@@ -27,17 +27,17 @@ struct Header {
 	u32 realResTableSz;
 	u32 sz;
 	
-	u32 nameMapSz;
+	u32 nameMapOfs;
 	u32 nameMapCnt;
 	
 	padding[8];
 	
-	u32 resEntrySz;
+	u32 resEntryOfs;
 	u32 resEntryCnt;
 	
 	padding[8];
 	
-	u32 resDataSz;
+	u32 resDataOfs;
 	u32 resDataCnt;
 	
 	padding[8];
@@ -64,10 +64,10 @@ struct RealResData {
 Header Hdr @ 0;
 
 struct NameMap {
-	char nameMap[Hdr.nameMapSz - sizeof(Hdr)];
+	char nameMap[Hdr.nameMapOfs - sizeof(Hdr)];
 	u32 nameIndices[Hdr.nameMapCnt];
 };
 
 NameMap Nmap @ sizeof(Hdr);
-RealResEntry resEntries[Hdr.resEntryCnt] @ addressof(Nmap) + sizeof(Nmap);
-RealResData resData[Hdr.resDataCnt] @ sizeof(resEntries) + addressof(resEntries);
+RealResEntry resEntries[Hdr.resEntryCnt] @ Hdr.resEntryOfs;
+RealResData resData[Hdr.resDataCnt] @ Hdr.resDataOfs;

@@ -1,19 +1,41 @@
+import sys
 from os import path
 from ctypes import cdll
 from typing import Iterable
 from PyQt5.QtCore import QDir, Qt
 from PyQt5.QtWidgets import QFileDialog, QDialog
 
-def getPath(relativePath:str):
-	return path.abspath(path.join(path.dirname(__file__), relativePath))
+# def getPath(relativePath:str):
+# 	return path.abspath(path.join(path.dirname(__file__), relativePath))
+
+def getParentDir(filePath:str, level:int = 1):
+	if level <= 0:
+		return filePath
+	else:
+		return getParentDir(path.dirname(filePath), level - 1)
+
+if getattr(sys, "frozen", False):
+	ROOT_FOLDER = path.dirname(sys.executable)
+else:
+	ROOT_FOLDER = getParentDir(path.abspath(__file__), 4)
+
+RES_FOLDER = path.join(ROOT_FOLDER, "res")
+LIB_FOLDER = path.join(ROOT_FOLDER, "lib")
+UI_FOLDER = path.join(ROOT_FOLDER, "ui")
+
+def getResPath(fileName:str):
+	return path.join(RES_FOLDER, fileName)
 
 def loadDLL(name:str):
-	dllPath = getPath(f"bin/{name}")
+	dllPath = path.join(LIB_FOLDER, name)
 
 	if not path.exists(dllPath):
 		return None
 	else:
 		return cdll.LoadLibrary(dllPath)
+
+def getUIPath(fileName:str):
+	return path.join(UI_FOLDER, fileName)
 
 def matrix_mul(A, B):
 	if len(A[0]) != len(B):
@@ -107,13 +129,14 @@ def pprint(tab, level:str = "", maxLevel:int = None):
 		for k, v in enumerate(tab):
 			pprintInternal(k, v, level, maxLevel)
 
+powerLabels = {0 : " B", 1: " KB", 2: " MB", 3: " GB", 4: " TB"}
+
 def formatBytes(size):
 	power = 2**10
 	n = 0
-	power_labels = {0 : " B", 1: " KB", 2: " MB", 3: " GB", 4: " TB"}
 
 	while size > power:
 		size /= power
 		n += 1
 	
-	return str(round(size)) + power_labels[n]
+	return str(round(size)) + powerLabels[n]

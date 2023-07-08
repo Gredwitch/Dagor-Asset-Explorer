@@ -1,8 +1,12 @@
+import sys
+from os import path
 
-from fileread import *
+sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
+
+from util.fileread import *
 from struct import unpack
-import log
-from enums import *
+import util.log as log
+from util.enums import *
 
 class DataBlock:
 	def __init__(self, nameId:int, paramsCount:int, blocksCount:int, firstBlockId:int, ofs:int, sharedBlk = None, parent = None):

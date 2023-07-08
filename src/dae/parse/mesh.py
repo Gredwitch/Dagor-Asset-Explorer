@@ -1,15 +1,15 @@
-
+import sys
 from os import path, getcwd
+
+sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
+
+import util.log as log
+import math
+# from math import *
 from struct import unpack
-
-
-# from ctypes import create_string_buffer
-
-from fileread import *
-from terminable import SafeRange, Terminable, Exportable
-from math import * #acos, degrees
-from enums import *
-import log
+from util.fileread import *
+from util.terminable import SafeRange, Terminable, FilePathable
+from util.enums import *
 
 # from misc import pprint, loadDLL
 # from assetcacher import ASSETCACHER
@@ -208,24 +208,15 @@ class InstShaderMeshResource:
 		self.shaderMesh = ShaderMesh(file.readBlock(sz))
 	
 
-class MatVData(Exportable): # stores material and vertex data :D	
+class MatVData(Terminable, FilePathable): # stores material and vertex data :D	
 	def __init__(self, file:BinFile, name:str = None, texCnt:int = 0, matCnt:int = 0, filePath:str = None):
-		if filePath: # filepath is used for debugging purposes only when loading an MVD individually - in practice it is never used
-			self.setFilePath(filePath)
-
-			
-			self.setName(path.splitext(path.basename(filePath))[0] if name is None else name)
-		else:
-			self.setName(name)
-		
-		self.setSize(file.getSize())
+		FilePathable.__init__(self, filePath, name, file.getSize())
 
 		self.__texCnt = texCnt
 		self.__matCnt = matCnt
 		self.__file = file
 
 		self.__dataComputed = False
-		self.isValid = True
 
 	def __repr__(self):
 		return f"<MVD {self.getName()} texCnt={self.__texCnt} matCnt={self.__matCnt} computed={self.__dataComputed}>"
@@ -963,7 +954,7 @@ class MatVData(Exportable): # stores material and vertex data :D
 
 
 if __name__ == "__main__":
-	from decompression import CompressedData
+	from util.decompression import CompressedData
 	file = BinFile("pilot_china1.rrd")
 	file.seek(1512, 0)
 

@@ -1,21 +1,25 @@
 
-import PIL
-from assetcacher import ASSETCACHER
-from fileread import *
-from terminable import Exportable
-from decompression import zstdDecompress, oodleDecompress, zlibDecompress, lzmaDecompress
+import sys
 from os import path, getcwd, mkdir
-from mesh import MatVData
-import log
-from enums import *
+
+sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
+
+import PIL
+import util.log as log
+from util.fileread import *
+from util.terminable import Packed, Pack
+from util.decompression import zstdDecompress, oodleDecompress, zlibDecompress, lzmaDecompress
+from parse.mesh import MatVData
+from util.enums import *
+from util.assetcacher import AssetCacher
 
 from struct import pack_into as packInto
 from struct import pack
 from ctypes import create_string_buffer
 
+DDSX_HEADER_SIZE = 0x20
 
-
-class DDSx(Exportable):
+class DDSx(Packed):
 	class Header:
 		def __repr__(self):
 			return f"<DDSxHeader {self.getFormattedData()}>"
@@ -145,53 +149,53 @@ class DDSx(Exportable):
 		b"BC7 "
 	)
 
+	@classmethod
+	@property
+	def classIconName(self) -> str:
+		return "asset_tex.bmp"
+	
+	@classmethod
+	@property
+	def classNiceName(cls) -> str:
+		return "DDSx"
+	
+	@classmethod
+	@property
+	def fileExtension(cls) -> str:
+		return "ddsx"
+	
 	def __repr__(self):
-		return f"<DDsX {self.getName()}: {self.__header.getFormattedData()}>"
+		return f"<DDsX {self.name}: {self.__header.getFormattedData()}>"
 
-	def __init__(self, filePath:str, name:str = None, header:Header = None, file:bytes = None):
-		self.setFilePath(filePath)
+	def __init__(self, 
+	      filePath:str, 
+		  name:str = None, 
+		  size:int = 0, 
+		  dataOffset:int = DDSX_HEADER_SIZE, 
+		  header:Header = None):
+		super().__init__(filePath, name, size, dataOffset)
 
-		self.__header:DDSx.Header = None
+		# if file == None:
+		# 	self.__loadSingleFile__()
+		# else:
 
-		if file == None:
-			self.__loadSingleFile__(filePath)
-		else:
+		self._setName(self.name.split('*')[0].split("$")[0])
+
+		if dataOffset == DDSX_HEADER_SIZE:
 			if header == None:
-				header = self.Header(BinFile(file[:0x20]))
-				file = file[0x20:]
-			
-			self.__loadFromBytes__(name, header, file)
+				file = open(self.filePath, "rb")
 
-		self.setSize(self.__header.memSz)
+				header = self.Header(BinFile(file.read(DDSX_HEADER_SIZE)))
 
-	def __loadSingleFile__(self, filePath:str):
-		fileName = path.splitext(path.basename(filePath))[0]
-		self.setFileName(fileName)
-		self.setName(fileName.split("*")[0].split("$")[0])
-
-		log.log(f"Loading {self.getFilePath()}")
-		log.addLevel()
-
-		file = open(filePath, "rb")
-
-		self.__header = self.Header(file.read(0x20))
-		self.__cData = file.read(self.__header.packedSz)
-
-		file.close()
-
-		log.subLevel()
-
-	def __loadFromBytes__(self, name:str, header:Header, file:bytes):
-		self.setFileName(name)
-		self.setName(name.split('*')[0].split("$")[0])
-
-		log.log(f"Loading {name} from DXP")
-		log.addLevel()
+				file.close()
+		elif header == None:
+			raise NotImplementedError(f"Missing header for packed DDSx (ofs={dataOffset})")
 
 		self.__header = header
-		self.__cData = file
 
-		log.subLevel()
+		self._setSize(self.__header.packedSz)
+
+		self._setValid()
 	
 	def __decompress__(self, data:bytes):
 		cMethod = self.__header.cMethod
@@ -224,9 +228,15 @@ class DDSx(Exportable):
 			log.log(f"Unknown DXT version {dxtVersion}, using DXT1 scale", LOG_WARN)
 
 			return dxtSize * 8
+
+	def getData(self):
+		return self.__decompress__(self.getBin().read())
 	
+	def save(self, output:str = getcwd()):
+		self._save(output, self.__header.getBin() + self.getBin().read())
+
 	def getDDS(self):
-		log.log(f"Converting {self.getName()} to DDS")
+		log.log(f"Converting {self.name} to DDS")
 		log.addLevel()
 
 
@@ -237,7 +247,7 @@ class DDSx(Exportable):
 		log.log(f"D3D Format    =	{d3dformat}")
 		log.log(f"Resolution    =	{w}x{h}")
 
-		data = self.__decompress__(self.__cData)
+		data = self.getData()
 
 
 		if self.__header.flags & 0x40000:
@@ -290,14 +300,19 @@ class DDSx(Exportable):
 
 		return data
 	
-	def setFileName(self, name:str):
-		self.__fileName = name
+	# def _setFileName(self, name:str):
+	# 	self.__fileName = name
 
-	def getFileName(self):
-		return self.__fileName
+	# @property
+	# def fileName(self):
+	# 	return self.__fileName
+	
+	# @property
+	# def name(self):
+	# 	return self.fileName
 	
 	def exportDDS(self, output:str = getcwd()):
-		fileName = f"{self.getFileName()}.dds"
+		fileName = f"{self.name}.dds"
 
 		output = path.normpath(f"{output}\\{fileName}")
 
@@ -314,143 +329,110 @@ class DDSx(Exportable):
 
 		log.log(f"Wrote {len(binData)} bytes to {output}")
 		log.subLevel()
+
+class DDSxTexturePack2(Pack): # TODO: Add logs
+	@classmethod
+	@property
+	def classIconName(self) -> str:
+		return "folder_dxp.bmp"
+
+	@classmethod
+	@property
+	def classNiceName(cls) -> str:
+		return "DDSx Texture Pack"
 	
-	def save(self, output:str = getcwd()):
-		fileName = f"{self.getFileName()}.ddsx"
-
-		log.log(f"Saving {fileName}")
-
-		output = path.normpath(f"{output}\\{fileName}")
-
-		binData = self.__header.getBin() + self.__cData
-
-		file = open(output, "wb")
-
-		file.write(binData)
-
-		file.close()
-
-		log.log(f"Wrote {len(binData)} bytes to {output}")
-
-class DDSxTexturePack2(Exportable): # TODO: Add logs
-	def __init__(self, filePath:str):
-		self.setFilePath(filePath)
-		self.setName(path.splitext(path.splitext(path.basename(filePath))[0])[0])
+	@classmethod
+	@property
+	def fileExtension(cls) -> str:
+		return "dxp.bin"
+	
+	def __init__(self, filePath:str, name:str = None):
+		super().__init__(filePath, name)
 
 		self.__readFile__()
+		self._setValid()
+
+		self.__pulledAll = False
 	
 	def __readFile__(self):
-		file = open(self.getFilePath(), "rb")
+		# log.addLevel()
 
-		magic = readInt(file)
-		unknown = readInt(file)
+		f = open(self.filePath, "rb")
+		f.seek(0x8, 1)
+		fileCnt = readInt(f)
 
-		self.__files:list[DDSx, False] = [None for _ in range(readInt(file))]
-		filesOfs = readInt(file) + 0x10
+		file = BinFile(f.read(readInt(f)))
+		f.close()
 
 		nameMapIndiciesOfs = readInt(file)
 		nameMapIndiciesCnt = readInt(file)
 
 		file.seek(8, 1)
 
-		self.__ddsxHeadersOfs = readInt(file) + 0x10
+		self.__ddsxHeadersOfs = readInt(file)
 		# self.__ddsxHeaders:list[DDSx.Header] = [None for _ in range(readInt(file))]
-		ddsxHeaderCnt = readInt(file)
+		if readInt(file) != fileCnt:
+			raise Exception("ddsxHeader cnt != fileCnt")
 
 		file.seek(8, 1)
 
-		self.__ddsxRecordsOfs = readInt(file) + 0x10
+		self.__ddsxRecordsOfs = readInt(file) + 0xC
 		# self.__ddsxRecords:list = [None for _ in range(readInt(file))]
-		ddsxRecordsCnt = readInt(file)
+		if readInt(file) != fileCnt:
+			raise Exception("ddsxRecord cnt != fileCnt")
 
 		file.seek(0x10, 1)
 
-		nameMapData = file.read(nameMapIndiciesOfs - 0x38)
-		nameMap = []
+		self.__nameMap = readNameMap(file, nameMapIndiciesCnt, nameMapIndiciesOfs, 0x38, self, True)
 
-		prev = readLong(file) - 0x38
-		
-		for i in range(nameMapIndiciesCnt):
-			next = nameMapIndiciesCnt == i + 1 and -1 or readLong(file) - 0x38
-			
-			nameMap.append(nameMapData[prev:next].decode("utf-8").rstrip("\x00"),)
-			
-			prev = next
-		
-		self.__nameMap = nameMap
+		self.__files:list[DDSx] = []
+
+		for i in range(fileCnt):
+			ddsx = self.__readDDSx__(file, i)
+
+			if ddsx is not None:
+				self.__files.append(ddsx)
 		
 		file.close()
 	
-	def __readDDSx__(self, file, id:int):
+	def __readDDSx__(self, file:BinFile, id:int):
 		name = self.__nameMap[id]
 
-		log.log(f"Pulling {id}:{name} from {self.getName()}.dxp.bin")
+		log.log(f"Pulling {id}:{name} from {self.name}.dxp.bin")
 		log.addLevel()
 
-		file.seek(self.__ddsxHeadersOfs + id * 0x20, 0)
+		file.seek(self.__ddsxHeadersOfs + id * DDSX_HEADER_SIZE, 0)
 
-		header = DDSx.Header(BinFile(file.read(0x20)))
+		header = DDSx.Header(BinFile(file.read(DDSX_HEADER_SIZE)))
 
-		ddsx = False
+		ddsx = None
 
 		if header.packedSz == 0:
 			log.log(f"Ignoring null sized DDSx")
 		else:
-			file.seek(self.__ddsxRecordsOfs + id * 0x18 + 0xC, 0)
-			
+			file.seek(self.__ddsxRecordsOfs + id * 0x18, 0) # 0x18
+
 			offset = readInt(file)
-
-			file.seek(offset, 0)
 			
-			ddsx = DDSx(self.getFilePath(), name, header, file.read(header.packedSz))
-
-		self.__files[id] = ddsx
+			ddsx = DDSx(self.filePath, name, header.memSz, offset, header)
 
 		log.subLevel()
 
 		return ddsx
 	
 	def getDDSxById(self, id:int):
-		if self.__files[id] is not None:
-			return self.__files[id]
-		
-		file = open(self.getFilePath(), "rb")
+		assert id >= 0 and id <= len(self.__files)
 
-		ddsx = self.__readDDSx__(file, id)
-
-		file.close()
-
-		return ddsx
+		return self.__files[id]
 	
 	def getDDSxByName(self, name:str):
 		for k, v in enumerate(self.__nameMap):
 			if v == name:
-				if self.__files[k] is not None:
-					return self.__files[id]
-				
-				file = open(self.getFilePath(), "rb")
-
-				ddsx = self.__readDDSx__(k)
-
-				file.close()
-
-				return ddsx
+				return self.getDDSxById(k)
 				
 		return None
 	
-	def getAllDDSx(self) -> list[DDSx, False]:
-		log.log(f"{self.getName()}: pulling all DDSx'")
-		log.addLevel()
-
-		file = open(self.getFilePath(), "rb")
-
-		for i in range(len(self.__files)):
-			self.__readDDSx__(file, i)
-		
-		file.close()
-
-		log.subLevel()
-
+	def getPackedFiles(self) -> list[DDSx, False]:
 		return self.__files
 
 class MaterialData: # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
@@ -661,10 +643,10 @@ class MaterialTemplateLibrary:
 
 			return best
 		
-		def __exportDiffuse__(self):
+		def __exportDiffuse__(self, outpath:str):
 			name = self.material.diffuse.split("*")[0]
 
-			ddsx:list[DDSx] = ASSETCACHER.getCachedAsset(DDSx, name)
+			ddsx:list[DDSx] = AssetCacher.getCachedAsset(DDSx, name)
 
 			if not ddsx:
 				log.log(f"{name} not found")
@@ -677,12 +659,12 @@ class MaterialTemplateLibrary:
 			
 			data = self.getBestTex(ddsx).getDDS()
 
-			self.__saveTexture__(data, output)
+			self.__saveTexture__(data, outpath + "/" + output)
 		
-		def __exportNormal__(self):
+		def __exportNormal__(self, outpath:str):
 			name = self.material.normal.split("*")[0]
 
-			ddsx:list[DDSx] = ASSETCACHER.getCachedAsset(DDSx, name)
+			ddsx:list[DDSx] = AssetCacher.getCachedAsset(DDSx, name)
 
 			if not ddsx:
 				return
@@ -693,17 +675,17 @@ class MaterialTemplateLibrary:
 			
 			data = self.getBestTex(ddsx).getDDS()
 
-			self.__saveTexture__(data, output)
+			self.__saveTexture__(data, outpath + "/" + output)
 
-		def exportTextures(self):
-			if not path.exists("textures"):
-				mkdir("textures")
+		def exportTextures(self, outpath:str = getcwd()):
+			if not path.exists(f"{outpath}/textures"):
+				mkdir(f"{outpath}/textures")
 			
 			if "map_Kd" in self.params:
-				self.__exportDiffuse__()
+				self.__exportDiffuse__(outpath)
 			
 			if "map_bump" in self.params:
-				self.__exportNormal__()
+				self.__exportNormal__(outpath)
 			
 
 	def __init__(self, materials:list[MaterialData]):
@@ -717,7 +699,7 @@ class MaterialTemplateLibrary:
 
 		return mtl
 	
-	def exportTextures(self):
+	def exportTextures(self, outpath:str = getcwd()):
 		log.log("Exporting MTL textures")
 		log.addLevel()
 
@@ -725,7 +707,7 @@ class MaterialTemplateLibrary:
 			log.log(f"Exporting textures from {mat.material.getName()}")
 			log.addLevel()
 
-			mat.exportTextures()
+			mat.exportTextures(outpath)
 
 			log.subLevel()
 		
@@ -773,14 +755,11 @@ def generateMaterialData(textures:list[str], mvdMats:list[MatVData.Material]):
 	return materials
 
 if __name__ == "__main__":
-	from assetcacher import ASSETCACHER
-	from gameres import GameResDesc
-
 	dxp = DDSxTexturePack2("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.dxp.bin")
 	
 	for ddsx in dxp.getAllDDSx():
 		if ddsx != False:
-			ASSETCACHER.cacheAsset(ddsx)
+			AssetCacher.cacheAsset(ddsx)
 
 	desc = GameResDesc("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\riDesc.bin")
 	

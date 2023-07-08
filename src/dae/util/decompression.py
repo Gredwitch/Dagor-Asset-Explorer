@@ -1,13 +1,18 @@
+import sys
+from os import path
+
+sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
+
 from ctypes import create_string_buffer, c_void_p, c_int64, c_int, c_size_t
 from os import path
 from zlib import decompress as zlibdecompress
 from zlib import compress as zlibcompress
 from pylzma import decompress as lzmadecompress
 from pylzma import compress as lzmacompress
-from misc import loadDLL
+from util.misc import loadDLL
 from struct import pack
-from fileread import *
-import log
+from util.fileread import *
+import util.log as log
 
 dakernel = loadDLL("daKernel-dev.dll")
 
