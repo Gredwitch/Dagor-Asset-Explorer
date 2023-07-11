@@ -14,6 +14,13 @@ from util.enums import *
 from util.terminable import Exportable
 # from settings import settings
 
+def extend(d:dict, key, value):
+	d[key] = value
+
+	return d
+
+GAMERESDESC_HACK = ("*Desc.bin", "GameResDesc")
+
 class AssetManager:
 	__OPENABLE_CLASSES:tuple[type[Exportable]] = (
 		GameResourcePack,
@@ -22,7 +29,7 @@ class AssetManager:
 	)
 
 	__OPENABLE_EXTENSIONS:dict[str, type[Exportable]] = {v.fileExtension:v for v in __OPENABLE_CLASSES}
-	__EXTENSIONS:dict[str, str] = {f"*.{v.fileExtension}":v.classNiceName for v in __OPENABLE_CLASSES}
+	__EXTENSIONS:dict[str, str] = extend({f"*.{v.fileExtension}":v.classNiceName for v in __OPENABLE_CLASSES}, *GAMERESDESC_HACK)
 
 	@classmethod
 	def isOpenable(cls, suffix:str):

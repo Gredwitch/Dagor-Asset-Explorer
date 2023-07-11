@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QAbstractItemView, QTreeView, QLineEdit, QHeaderView
 from PyQt5.QtCore import QMimeData, Qt, QSortFilterProxyModel, QPoint, QFileInfo
 from PyQt5.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QStandardItemModel, QStandardItem, QIcon
 from util.misc import formatBytes, getResPath, openFile
-from util.terminable import Exportable, Packed, Pack
+from util.terminable import Exportable, Packed, Pack, Terminable
 from util.enums import *
 from abc import abstractmethod
 from pyperclip import copy as copyToClipboard
@@ -197,6 +197,7 @@ class ThreadedAction(CustomAction):
 		self.triggered.connect(self.__run__)
 
 		self.__error = False
+		self.__cancel = False
 	
 	@property
 	@abstractmethod
@@ -209,11 +210,29 @@ class ThreadedAction(CustomAction):
 	def dialogType(self) -> int:
 		...
 
+	def setTerminable(self, ter:Terminable):
+		self.item.mainWindow.setTerminable(ter)
+	
+	def clearTerminable(self):
+		self.item.mainWindow.clearTerminable()
+	
+	def handleTermination(self, ter:Terminable):
+		if self.shouldTerminate:
+			return True
+		else:
+			self.setTerminable(ter)
+
+			return False
+
+	@property
+	def shouldTerminate(self) -> bool:
+		return self.item.mainWindow.shouldTerminate
+
 	def setTaskStatus(self, text:str):
-		self.mainWindow.taskStatus.emit(text)
+		self.mainWindow.setTaskStatus(text)
 
 	def setTaskProgress(self, progress:float):
-		self.mainWindow.taskProgress.emit(progress * 100)
+		self.mainWindow.setTaskProgress(progress * 100)
 
 	def preRun(self) -> bool:
 		return True
@@ -225,12 +244,20 @@ class ThreadedAction(CustomAction):
 		if not self.preRun():
 			return
 
-		self.mainWindow.requestedDialog.emit(self.dialogType)
-		self.mainWindow.taskTitle.emit(self.taskTitle)
+		self.mainWindow.setRequestedDialog(self.dialogType)
+		self.mainWindow.setTaskTitle(self.taskTitle)
 		self.setTaskStatus(self.taskTitle)
 
 		self.mainWindow.threadPool.start(partial(self.__threadedRun__))
+
+
+	def cancel(self):
+		self.__cancel = True
 	
+	@property
+	def cancelled(self):
+		return self.__cancel
+
 	def __threadedRun__(self):
 		level = log.curLevel
 
@@ -247,7 +274,7 @@ class ThreadedAction(CustomAction):
 			MessageBox("An error occured during the process. Check the console for details.")
 
 
-		self.mainWindow.requestedDialog.emit(DIALOG_NONE)
+		self.mainWindow.setRequestedDialog(DIALOG_NONE)
 
 class OpenFileLocation(CustomAction):
 	def run(self):
@@ -314,8 +341,12 @@ class Extract(SaveAction):
 
 	def save(self, output:str):
 		asset:Packed = self.item.asset
+
+		self.setTerminable(asset)
 		
 		asset.save(output)
+
+		self.clearTerminable()
 
 		self.setTaskProgress(1)
 
@@ -332,15 +363,22 @@ class ExtractAll(SaveAction):
 	
 	def save(self, output:str):
 		asset:Pack = self.item.asset
+		self.setTerminable(asset)
+
 		packedFiles = asset.getPackedFiles()
 		fileCnt = len(packedFiles)
 
 		for k, v in enumerate(packedFiles):
+			if self.handleTermination(v):
+				break
+			
 			self.setTaskStatus(f"Extracting {v.name}.{v.fileExtension}... ({k + 1}/{fileCnt})")
 
 			v.save(output)
 
 			self.setTaskProgress((k + 1) / fileCnt)
+		
+		self.clearTerminable()
 
 
 class ExportToDDS(SaveAction):
@@ -356,8 +394,11 @@ class ExportToDDS(SaveAction):
 
 	def save(self, output:str):
 		asset:DDSx = self.item.asset
+		self.setTerminable(asset)
 		
 		asset.exportDDS(output)
+
+		self.clearTerminable()
 
 		self.setTaskProgress(100)
 
@@ -374,15 +415,22 @@ class ExportAllToDDS(SaveAction):
 	
 	def save(self, output:str):
 		asset:DDSxTexturePack2 = self.item.asset
+		self.setTerminable(asset)
+
 		packedFiles = asset.getPackedFiles()
 		fileCnt = len(packedFiles)
 
 		for k, v in enumerate(packedFiles):
+			if self.handleTermination(v):
+				break
+
 			self.setTaskStatus(f"Exporting {v.name}.dds... ({k + 1}/{fileCnt})")
 
 			v.exportDDS(output)
 
 			self.setTaskProgress((k + 1) / fileCnt)
+		
+		self.clearTerminable()
 
 
 class ExportToOBJ(SaveAction):
@@ -403,8 +451,11 @@ class ExportToOBJ(SaveAction):
 
 	def save(self, output:str):
 		asset:RendInst = self.item.asset
+		self.setTerminable(asset)
 		
 		asset.exportObj(self.lod, output)
+
+		self.clearTerminable()
 		
 
 		self.setTaskProgress(1)
@@ -422,12 +473,18 @@ class ExportLODsToOBJ(SaveAction):
 
 	def save(self, output:str):
 		asset:RendInst = self.item.asset
+		self.setTerminable(asset)
 		asset.computeData()
 
 		for i in range(asset.lodCount):
+			if self.handleTermination(asset):
+				break
+
 			asset.exportObj(i, output)
 
 			self.setTaskProgress((i + 1) / asset.lodCount)
+		
+		self.clearTerminable()
 
 class ExportAllToOBJ(SaveAction):
 	item:AssetItem
@@ -442,6 +499,8 @@ class ExportAllToOBJ(SaveAction):
 	
 	def save(self, output:str):
 		asset:GameResourcePack = self.item.asset
+		self.setTerminable(asset)
+
 		packedFiles = asset.getPackedFiles()
 		fileCnt = 0
 
@@ -453,6 +512,8 @@ class ExportAllToOBJ(SaveAction):
 
 		for v in packedFiles:
 			if isinstance(v, RendInst):
+				if self.handleTermination(v):
+					break
 				k += 1
 
 				self.setTaskStatus(f"Exporting {v.getExportName(0)}.obj... ({k}/{fileCnt})")
@@ -469,7 +530,8 @@ class ExportAllToOBJ(SaveAction):
 					log.subLevel(log.curLevel - level)
 
 				self.setTaskProgress(k / fileCnt)
-
+		
+		self.clearTerminable()
 
 
 class FileSizeSortProxyModel(QSortFilterProxyModel):
@@ -525,6 +587,7 @@ class CustomTreeView(QTreeView):
 		self.setContextMenuPolicy(Qt.CustomContextMenu)
 		self.setAcceptDrops(True)
 		self.setDragEnabled(True)
+		self.mainWindow = None
 
 		self.customContextMenuRequested.connect(self.rightClickEvent)
 	

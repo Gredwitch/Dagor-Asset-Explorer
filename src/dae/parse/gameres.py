@@ -8,7 +8,7 @@ from util.fileread import *
 from util.enums import *
 from parse.datablock import *
 from parse.realres import RealResData, UnknownResData, REALRES_CLASSES_DICT
-from util.terminable import SafeRange, Pack
+from util.terminable import SafeRange, Pack, Terminable, FilePathable, SafeEnumerate, SafeIter
 from util.decompression import zstdDecompress
 from parse.material import MaterialData, computeMaterialNames
 
@@ -33,21 +33,14 @@ from parse.material import MaterialData, computeMaterialNames
 
 
 
-class GameResDesc:
+class GameResDesc(FilePathable, Terminable):
 	def __init__(self, filePath:str):
-		self.__filePath = filePath
-		self.__fileName = path.splitext(path.basename(filePath))[0]
+		super(FilePathable, self).__init__(filePath)
+
 		self.__datablock = None
-
-		log.log(f"Reading GameResDesc {self.__fileName}")
-		log.addLevel()
-
-		self.__readFile__()
-
-		log.subLevel()
 	
 	def __getDecompressed__(self):
-		file = open(self.__filePath, "rb")
+		file = open(self.filePath, "rb")
 
 
 		if readByte(file) != 2:
@@ -69,8 +62,13 @@ class GameResDesc:
 
 		return decompressed
 	
-	def __readFile__(self):
+	def loadDataBlock(self):
+		log.log(f"Reading GameResDesc {self.name}")
+		log.addLevel()
+
 		self.__datablock = loadDataBlock(self.__getDecompressed__())
+
+		log.subLevel()
 	
 	def getDataBlock(self):
 		return self.__datablock
@@ -88,7 +86,7 @@ class GameResDesc:
 		except Exception as er:
 			return tuple()
 
-		return tuple(tex.getParamById(i)[1] for i in range(tex.getParamsCount()))
+		return tuple(tex.getParamById(i)[1] for i in SafeRange(self, tex.getParamsCount()))
 	
 	def hasName(self, model:str):
 		try:
@@ -113,14 +111,14 @@ class GameResDesc:
 		# mats = []
 		mats:list[MaterialData] = []
 		
-		for matBlock in (matB.getChildren()):
+		for matBlock in SafeIter(self, matB.getChildren()):
 			mat = MaterialData()
 
 
 			log.log(f"{matBlock}")
 			log.addLevel()
 
-			for i in range(matBlock.getParamsCount()):
+			for i in SafeRange(self, matBlock.getParamsCount()):
 				flags, params = matBlock.getParamById(i)
 				blockName = matBlock.getParamNameByFlags(flags)
 				blockType = flags & 0xF000000
@@ -138,16 +136,9 @@ class GameResDesc:
 
 			mats.append(mat)
 
-		computeMaterialNames(mats)
+		computeMaterialNames(mats, self)
 
 		return mats
-
-	def getFilePath(self):
-		return self.__filePath
-	
-	def getName(self):
-		return self.__fileName
-
 
 class GameResourcePack(Pack): # may need cleanup / TODO: rewrite like DXP2
 	@classmethod
@@ -242,8 +233,6 @@ class GameResourcePack(Pack): # may need cleanup / TODO: rewrite like DXP2
 	def __init__(self, filePath:str, name:str = None):
 		super().__init__(filePath, name)
 
-		self.__realResources = {}
-
 		self.__readFile__()
 
 		log.log(self)
@@ -312,10 +301,10 @@ class GameResourcePack(Pack): # may need cleanup / TODO: rewrite like DXP2
 								readInt(file),
 								readLong(file))
 
-		# for resEntry in realResEntries:
+		# for resEntry in SafeIter(self, realResEntries):
 			# file.seek(resEntry.getParentOffset(), 0)
 
-			# for i in range(resEntry.getParentCnt()):
+			# for i in SafeRange(self, resEntry.getParentCnt()):
 			# 	resEntryIdx = readShort(file)
 
 			# 	try:
@@ -345,7 +334,7 @@ class GameResourcePack(Pack): # may need cleanup / TODO: rewrite like DXP2
 		return tuple(self.getRealResource(i) for i in SafeRange(self, len(self.__realResEntries)))
 
 	def getRealResId(self, name:str):
-		for k, v in enumerate(self.__realResEntries):
+		for k, v in SafeEnumerate(self, self.__realResEntries):
 			if v.getName() == name:
 				return k
 

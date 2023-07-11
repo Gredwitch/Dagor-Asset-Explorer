@@ -51,3 +51,5 @@ def log(message:str, type:int = 0): # TODO: add multithreading support
 		print("[W]", end = "")
 	
 	print(f" | {getLevelStr()}{message}")
+
+	pass

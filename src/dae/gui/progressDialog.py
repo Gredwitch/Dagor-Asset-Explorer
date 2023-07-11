@@ -34,8 +34,15 @@ class MessageBox(QtWidgets.QMessageBox):
 
 
 class ProgressDialog(QtWidgets.QDialog):
-	def __init__(self):
+	progressLabel:QtWidgets.QLabel
+	movieLabel:QtWidgets.QLabel
+	progressBar:QtWidgets.QProgressBar
+	cancelButton:QtWidgets.QPushButton
+
+	def __init__(self, mainWindow):
 		super().__init__()
+
+		self.mainWindow = mainWindow
 
 		uic.loadUi(PROGRESSDIALOG_UI_PATH, self)
 
@@ -47,9 +54,15 @@ class ProgressDialog(QtWidgets.QDialog):
 
 		self.movieLabel.setMovie(movie)
 
+		self.cancelButton.clicked.connect(self.cancel)
+
 		# self.setFixedSize(self.size())
 
 		self.show()
+	
+	def cancel(self):
+		self.cancelButton.setEnabled(False)
+		self.mainWindow.terminateThreads()
 	
 	def setStatus(self, status:str):
 		self.progressLabel.setText(status)

@@ -8,7 +8,7 @@ import util.log as log
 import gc
 # from PyQt5 import uic, QtWidgets, QtCore, QtGui
 from PyQt5.uic import loadUi
-from PyQt5.QtCore import pyqtSignal, QDir, QThreadPool, QFileInfo, QDirIterator
+from PyQt5.QtCore import pyqtSignal, QDir, QFileInfo, QDirIterator, QRunnable, QThreadPool
 from PyQt5.QtWidgets import QMainWindow, QGridLayout, QAction, QFileDialog, QApplication
 from PyQt5.QtGui import QIcon, QStandardItem
 from gui.customtreeview import CustomTreeView, AssetItem, FolderItem
@@ -20,7 +20,7 @@ from parse.realres import RealResData
 from parse.material import DDSx
 from util.assetcacher import AssetCacher
 from util.enums import *
-from util.terminable import Exportable, Pack
+from util.terminable import Exportable, Pack, Terminable
 from functools import partial
 from traceback import format_exc
 
@@ -90,6 +90,10 @@ class MainWindow(QMainWindow):
 		self.actionUnmount.triggered.connect(self.unmountAssets)
 
 		self.threadPool = QThreadPool()
+		self.activeTerminable:Terminable = None
+		self.shouldTerminate = False
+		self.treeView.mainWindow = self
+
 		self.cachedIcons:dict[str:QIcon] = {}
 		
 		self.show()
@@ -132,35 +136,67 @@ class MainWindow(QMainWindow):
 		self.mountAssets(dialog.selectedFiles())
 	
 	def mountAssets(self, paths:list[str]):
+		# self.activeThread = QRunnable(partial(self.__mountAssetsInternal__, paths))
+		# thread = threading.Thread(target = partial(self.__mountAssetsInternal__, paths))
+		# thread.start()
+		# self.threadPool.start(self.activeThread)
 		self.threadPool.start(partial(self.__mountAssetsInternal__, paths))
 	
 	def __mountAssetsInternal__(self, paths:list[str]):
-		self.requestedDialog.emit(DIALOG_STATUS)
+		self.setRequestedDialog(DIALOG_STATUS)
 		
-		self.taskTitle.emit("Mounting assets")
-		self.taskStatus.emit("Loading files...")
+		self.setTaskTitle("Mounting assets")
+		self.setTaskStatus("Loading files...")
 
 		for p in paths:
 			self.exploreFileInfo(QFileInfo(p), self.treeView.treeModel)
 
-		self.requestedDialog.emit(DIALOG_NONE)
+		self.setRequestedDialog(DIALOG_NONE)
 	
+	def setRequestedDialog(self, rType:int):
+		self.requestedDialog.emit(rType)
 
+	def setTaskTitle(self, title:str):
+		self.taskTitle.emit(title)
+
+	def setTaskProgress(self, progress:int):
+		self.taskProgress.emit(progress)
+
+	def setTaskStatus(self, status:str):
+		self.taskStatus.emit(status)
+	
+	def setTerminable(self, ter:Terminable):
+		self.activeTerminable = ter
+	
+	def clearTerminable(self):
+		self.activeTerminable = None
 
 	def exploreFileInfo(self, finfo:QFileInfo, parent:QStandardItem):
+		if self.shouldTerminate:
+			return False
+
 		if finfo.isFile():
 			absFilePath = finfo.absoluteFilePath()
 			suffix = finfo.completeSuffix()
 			isDesc = absFilePath[-8:] == "Desc.bin"
 			
 			if isDesc or AssetManager.isOpenable(suffix):
-				self.taskStatus.emit(f"Loading {absFilePath}")
+				self.setTaskStatus(f"Loading {absFilePath}")
+				success = False
 
 				log.log(f"Found {absFilePath}")
 				log.addLevel()
 
 				if isDesc:
-					AssetCacher.appendGameResDesc(GameResDesc(absFilePath))
+					grd = GameResDesc(absFilePath)
+
+					AssetCacher.appendGameResDesc(grd)
+
+					self.setTerminable(grd)
+					grd.loadDataBlock()
+					self.clearTerminable()
+
+					success = True
 				else:
 					level = log.curLevel
 
@@ -170,12 +206,16 @@ class MainWindow(QMainWindow):
 
 						handleCaching(asset)
 
+						self.setTerminable(asset)
+
 						if asset == None or not asset.valid:
 							log.log(f"Failed to mount '{finfo.absoluteFilePath()}'", LOG_ERROR)
 						else:
 							item:AssetItem = self.getAssetItem(asset, finfo)
 							
 							parent.appendRow(item.getRow())
+
+							success = True
 					except Exception as ex:
 						log.log(f"Couldn't initialize '{absFilePath}'", LOG_ERROR)
 						print(format_exc())
@@ -185,6 +225,10 @@ class MainWindow(QMainWindow):
 						pass
 				
 				log.subLevel()
+
+				self.clearTerminable()
+
+				return success
 		elif finfo.isDir():
 			iterator = QDirIterator(
 				finfo.absoluteFilePath(),
@@ -195,13 +239,22 @@ class MainWindow(QMainWindow):
 
 			if iterator.hasNext():
 				item = FolderItem(self, finfo)
+				fileCnt = 0
+				hasFile = False
 
 				while iterator.hasNext():
-					self.exploreFileInfo(QFileInfo(iterator.next()), item.mainItem)
-				
-				parent.appendRow(item.getRow())
-	
+					foundFile = self.exploreFileInfo(QFileInfo(iterator.next()), item.mainItem)
 
+					if not hasFile and foundFile:
+						hasFile = True
+				
+				if hasFile:
+					parent.appendRow(item.getRow())
+
+				return hasFile
+		
+		return False
+	
 	def getAssetItem(self, asset:Exportable, finfo:QFileInfo = None, parentAsset:AssetItem = None) -> AssetItem:
 		if asset.iconName is None:
 			raise Exception(f"{asset} has no icon name")
@@ -216,13 +269,28 @@ class MainWindow(QMainWindow):
 		
 		return item
 
+	
+	def terminateThreads(self):
+		print("!!! Terminating thread !!!")
+
+		self.shouldTerminate = True
+
+		if self.activeTerminable is not None:
+			self.activeTerminable.terminate()
+		
+		self.threadPool.waitForDone()
+		self.clearTerminable()
+
+		self.shouldTerminate = False
+		
+		log.subLevel(log.curLevel)
+		
+		self.setRequestedDialog(DIALOG_NONE)
 
 
 class App(QApplication):
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
-
-		self.__dialogVal = False
 		
 		window = MainWindow()
 		
@@ -230,35 +298,36 @@ class App(QApplication):
 		window.taskTitle.connect(self.handleDialogTitle)
 		window.taskStatus.connect(self.handleDialogStatus)
 		window.taskProgress.connect(self.handleDialogProgress)
-		window.dialogClosed.emit(self.__dialogVal)
 
 		self.window = window
 		self.progressDialog:ProgressDialog = None
 	
 	def handleDialogRequest(self, dialogType:int):
 		if dialogType == DIALOG_NONE:
-			self.progressDialog.close()
-			self.progressDialog = None
+			if self.progressDialog is not None:
+				self.progressDialog.close()
+				self.progressDialog = None
 			
 			self.window.setEnabled(True)
 		else:
 			self.window.setEnabled(False)
 			
 			if dialogType == DIALOG_PROGRESS:
-				self.progressDialog = ProgressDialog()
+				self.progressDialog = ProgressDialog(self.window)
 			elif dialogType == DIALOG_STATUS:
-				self.progressDialog = BusyProgressDialog()
-		
-		self.__curDialogType = dialogType
+				self.progressDialog = BusyProgressDialog(self.window)
 
 	def handleDialogTitle(self, txt:str):
-		self.progressDialog.setWindowTitle(txt)
+		if self.progressDialog is not None:
+			self.progressDialog.setWindowTitle(txt)
 
 	def handleDialogStatus(self, txt:str):
-		self.progressDialog.setStatus(txt)
+		if self.progressDialog is not None:
+			self.progressDialog.setStatus(txt)
 
 	def handleDialogProgress(self, progress:int):
-		self.progressDialog.setProgress(progress)
+		if self.progressDialog is not None:
+			self.progressDialog.setProgress(progress)
 
 
 

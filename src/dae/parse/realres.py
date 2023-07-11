@@ -11,7 +11,7 @@ from util.misc import vectorTransform, getResPath
 from util.assetcacher import AssetCacher
 from struct import unpack, pack
 from parse.datablock import *
-from util.terminable import Packed, SafeRange
+from util.terminable import Packed, SafeRange, SafeIter, SafeEnumerate
 from parse.mesh import MatVData, InstShaderMeshResource, ShaderMesh
 from parse.material import MaterialData, MaterialTemplateLibrary,  computeMaterialNames, generateMaterialData
 from abc import abstractmethod
@@ -110,7 +110,7 @@ class GeomNodeTree(RealResData):
 	def classIconName(self):
 		return "asset_skeleton.bmp"
 	
-	class Node:
+	class Node: # not a terminable
 		# def __iter__(self):
 		# 	return self
 		
@@ -206,13 +206,13 @@ class GeomNodeTree(RealResData):
 		nodeCnt = readInt(file) - 1
 
 		# self.__nodes = dict(tuple(tuple((v.name, v) for v in (self.Node(file.readBlock(160), file), ))[0] for i in range(nodeCnt)), )
-		nodes = tuple(self.Node(file.readBlock(160), file, i) for i in range(nodeCnt))
+		nodes = tuple(self.Node(file.readBlock(160), file, i) for i in SafeRange(self, nodeCnt))
 		
 		
 		self.__buildTree__(nodes)
 
 		self.__nodes = nodes
-		self.__nodesDict = {v.name:v for v in nodes}
+		self.__nodesDict = {v.name:v for v in SafeIter(self, nodes)}
 	
 	def getNodeByName(self, name:str):
 		if name in self.__nodesDict:
@@ -230,7 +230,7 @@ class GeomNodeTree(RealResData):
 		return self.__nodes
 
 	def __buildTree__(self, nodes:dict):
-		for nodeName in nodes:
+		for nodeName in SafeIter(self, nodes):
 			# node:GeomNodeTree.Node = nodes[nodeName]
 			node:GeomNodeTree.Node = nodeName
 
@@ -238,7 +238,7 @@ class GeomNodeTree(RealResData):
 			childCnt = node.refCnt
 
 			if childCnt != 0:
-				for i in range(childCnt):
+				for i in SafeRange(self, childCnt):
 					try:
 						child:GeomNodeTree.Node = nodes[childOfs + i]
 					except:
@@ -377,7 +377,7 @@ class RendInst(RealResData):
 
 		prev = readInt(file) - 0x10
 		
-		for i in range(texCnt):
+		for i in SafeRange(self, texCnt):
 			next = texCnt == i + 1 and -1 or readInt(file) - 0x10
 			
 			nameMap.append(nameMapData[prev:next].decode("utf-8").rstrip("\x00"),)
@@ -423,7 +423,7 @@ class RendInst(RealResData):
 
 		impostorDataOfs = readInt(data)
 		
-		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(self.lodCount)) # occ table is acutally a float[12]
+		occ = tuple(unpack("IIfI", file.read(0x10)) for i in SafeRange(self, self.lodCount)) # occ table is acutally a float[12]
 
 		if impostorDataOfs > 0:
 			file.seek(ofs + impostorDataOfs, 0)
@@ -445,7 +445,7 @@ class RendInst(RealResData):
 		log.log(f"Processing {self.lodCount} shadermesh resources")
 		log.addLevel()
 
-		self.__shaderMesh = tuple(InstShaderMeshResource(file) for i in range(self.lodCount))
+		self.__shaderMesh = tuple(InstShaderMeshResource(file) for i in SafeRange(self, self.lodCount))
 
 		log.subLevel()
 
@@ -456,8 +456,8 @@ class RendInst(RealResData):
 		mvd = self.mvd
 		mvd.computeData()
 
-		materials = generateMaterialData(self.textures, mvd.getMaterials())
-		computeMaterialNames(materials)
+		materials = generateMaterialData(self.textures, mvd.getMaterials(), self)
+		computeMaterialNames(materials, self)
 
 		self._setMaterials(materials)
 
@@ -473,7 +473,7 @@ class RendInst(RealResData):
 		
 		vertexDataCnt = mvd.getVDCount()
 		shaderMeshElems = self.__shaderMesh[lodId].shaderMesh.elems
-		vertexDatas:list[list[MatVData.VertexData, int]] = [None for i in range(vertexDataCnt)]
+		vertexDatas:list[list[MatVData.VertexData, int]] = [None for i in SafeRange(self, vertexDataCnt)]
 
 
 		obj = ""
@@ -483,7 +483,7 @@ class RendInst(RealResData):
 
 		vertexOrder:dict[int, list[ShaderMesh.Elem]] = {}
 
-		for k, elem in enumerate(shaderMeshElems):
+		for k, elem in SafeEnumerate(self, shaderMeshElems):
 			if not elem.vdOrderIndex in vertexOrder:
 				vertexOrder[elem.vdOrderIndex] = []
 			
@@ -497,7 +497,7 @@ class RendInst(RealResData):
 				verts, UVs = vData.getVertices(), vData.getUVs()
 				vCnt = len(verts)
 
-				for i in range(vCnt):
+				for i in SafeRange(self, vCnt):
 					v = verts[i]
 
 					objVerts += f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n"
@@ -513,8 +513,8 @@ class RendInst(RealResData):
 
 			elem.smid = k # TODO: put this in the class constructor
 
-		for orderElems in vertexOrder.values():
-			for elem in orderElems:
+		for orderElems in SafeIter(self, vertexOrder.values()):
+			for elem in SafeIter(self, orderElems):
 				log.log(f"Processing shader mesh {elem.smid}")
 				log.addLevel()
 
@@ -527,12 +527,12 @@ class RendInst(RealResData):
 				
 				curFace = elem.startI // 3
 
-				for i in range(curFace, curFace + elem.numFace):
+				for i in SafeRange(self, curFace, curFace + elem.numFace):
 					face = faces[i]
 
 					f = ""
 
-					for idx in face:
+					for idx in SafeIter(self, face):
 						idx += 1 + vOfs
 
 						f += f" {idx}/{idx}"
@@ -743,7 +743,7 @@ class DynModel(RendInst):
 
 			self.__noScale = True
 		
-		occ = tuple(unpack("IIfI", file.read(0x10)) for i in range(self.lodCount)) # occ table is acutally a float[4 * lodCnt]
+		occ = tuple(unpack("IIfI", file.read(0x10)) for i in SafeRange(self, self.lodCount)) # occ table is acutally a float[4 * lodCnt]
 		
 
 	def _readSceneNodes(self, file:BinBlock):
@@ -777,7 +777,7 @@ class DynModel(RendInst):
 		
 		log.log(f"Processed {nameCnt} nodes")
 		
-		self.__skinNodes = {readShort(file):i for i in range(skinNodeCnt)}
+		self.__skinNodes = {readShort(file):i for i in SafeRange(self, skinNodeCnt)}
 
 		log.log(f"Processed {skinNodeCnt} skin nodes")
 
@@ -791,7 +791,7 @@ class DynModel(RendInst):
 		log.log(f"Processing {lodCnt} LODs")
 		log.addLevel()
 		
-		self.__lods = tuple(self.Lod(file, i) for i in range(lodCnt))
+		self.__lods = tuple(self.Lod(file, i) for i in SafeRange(self, lodCnt))
 
 		log.subLevel()
 
@@ -807,7 +807,7 @@ class DynModel(RendInst):
 		log.log(f"Loading {cnt} shader skinned mesh resources")
 		log.addLevel()
 
-		for i in range(cnt):
+		for i in SafeRange(self, cnt):
 			log.log(f"{cnt}:")
 			log.addLevel()
 
@@ -856,7 +856,7 @@ class DynModel(RendInst):
 		
 		vertexDataCnt = mvd.getVDCount()
 		lodShaderMesh = lod.shaderMesh
-		vertexDatas:list[list[MatVData.VertexData, int, int]] = [None for i in range(vertexDataCnt)]
+		vertexDatas:list[list[MatVData.VertexData, int, int]] = [None for i in SafeRange(self, vertexDataCnt)]
 
 
 		obj = ""
@@ -873,7 +873,7 @@ class DynModel(RendInst):
 
 		# rootUndo = inverse_matrix(skeleton.getNodeByName("").wtm)
 
-		for shaderMeshId, shaderMesh in enumerate(lodShaderMesh):
+		for shaderMeshId, shaderMesh in SafeEnumerate(self, lodShaderMesh):
 			rigid = lod.rigids[shaderMeshId]
 			nodeId = self.__skinNodes[rigid.nodeId]
 
@@ -917,7 +917,7 @@ class DynModel(RendInst):
 					
 			# VirtualDynModelEntity::setup
 
-			for k, elem in enumerate(shaderMesh.elems):
+			for k, elem in SafeEnumerate(self, shaderMesh.elems):
 				# log.log(f"Processing shader mesh {k}")
 				log.addLevel()
 
@@ -932,7 +932,7 @@ class DynModel(RendInst):
 
 					vCnt = len(verts)
 
-					for i in range(vCnt):
+					for i in SafeRange(self, vCnt):
 						verts[i][0] *= self.__bpC255[0]
 						verts[i][1] *= self.__bpC255[1]
 						verts[i][2] *= self.__bpC255[2]
@@ -956,7 +956,7 @@ class DynModel(RendInst):
 				if node is not None:
 					verts = vertexDatas[elem.vData][2]
 				
-					for i in range(elem.startV, elem.startV + elem.numV):
+					for i in SafeRange(self, elem.startV, elem.startV + elem.numV):
 						vert = verts[i]
 
 						if self.__noScale:
@@ -969,12 +969,12 @@ class DynModel(RendInst):
 						vert[2] = z + tm[2][3]
 
 
-				for i in range(vS, vS + elem.numFace):
+				for i in SafeRange(self, vS, vS + elem.numFace):
 					face = faces[i]
 
 					f = ""
 
-					for idx in face:
+					for idx in SafeIter(self, face):
 						idx += 1 + indiceOffset
 
 						f += f" {idx}/{idx}"
@@ -989,8 +989,8 @@ class DynModel(RendInst):
 			
 			log.subLevel()
 		
-		for i in vertexDataOrder:
-			for vert in vertexDatas[i][2]:
+		for i in SafeIter(self, vertexDataOrder):
+			for vert in SafeIter(self, vertexDatas[i][2]):
 				x, y, z = vert
 
 				objVerts += f"v {-x:.6f} {y:.6f} {z:.6f}\n"
@@ -1143,8 +1143,8 @@ class CollisionGeom(RealResData):
 
 			file.seek(96, 1)
 
-			self.__verts:tuple[tuple[float, float, float]] = tuple(unpack("3f", file.read(12)) for _ in range(readInt(file)))
-			self.__faces:tuple[tuple[int, int, int]] = tuple(unpack("3I", file.read(12)) for _ in range(readInt(file) // 3))
+			self.__verts:tuple[tuple[float, float, float]] = tuple(unpack("3f", file.read(12)) for _ in SafeRange(self, readInt(file)))
+			self.__faces:tuple[tuple[int, int, int]] = tuple(unpack("3I", file.read(12)) for _ in SafeRange(self, readInt(file) // 3))
 
 		def getVerts(self):
 			return self.__verts
@@ -1160,7 +1160,7 @@ class CollisionGeom(RealResData):
 
 		self.__readHeader__(file)
 
-		self.__nodes = tuple(CollisionGeom.CollNode(file) for _ in range(self.__nodeCnt))
+		self.__nodes = tuple(CollisionGeom.CollNode(file) for _ in SafeRange(self, self.__nodeCnt))
 	
 	def getObj(self):
 		self.__readFile__()
@@ -1169,17 +1169,17 @@ class CollisionGeom(RealResData):
 
 		vOfs = 0
 
-		for node in self.__nodes:
+		for node in SafeEnumerate(self, self.__nodes):
 			verts = node.getVerts()
 
-			for v in verts:
+			for v in SafeIter(self, verts):
 				obj += f"v {v[0]:.4f} {v[2]:.4f} {v[1]:.4f}\n"
 				obj += f"vt 0.0 0.0\n"
 			
-			for f in node.getFaces():
+			for f in SafeIter(self, node.getFaces()):
 				obj += "f"
 
-				for idx in f:
+				for idx in SafeIter(self, f):
 					idx += 1 + vOfs
 
 					obj += f" {idx}/{idx}"

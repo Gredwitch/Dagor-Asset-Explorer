@@ -8,6 +8,7 @@ import util.log as log
 from PyQt5.QtCore import QObject
 from abc import ABC, abstractmethod
 from util.fileread import BinFile
+from typing import Iterable, Reversible
 
 class Terminable:
 	class SafeRange:
@@ -48,11 +49,52 @@ class Terminable:
 		def next(self):
 			self.cur += self.step
 
-			if self.cur >= self.val1 or self.cur < self.val2 or self.parent.shouldTerminate() == True:
+			if self.cur >= self.val1 or self.cur < self.val2 or self.parent.shouldTerminate:
 				raise StopIteration()
 			else:
 				return self.cur
 
+	class SafeEnumerate(enumerate):
+		def __init__(self, parent, iterable:Iterable, start:int = ...):
+			super().__init__(iterable, start)
+
+			self.parent = parent
+		
+		def __next__(self):
+			if self.parent.shouldTerminate:
+				raise StopIteration()
+			else:
+				return super().__next__()
+
+	class SafeIter:
+		def __init__(self, parent, iterable:Iterable):
+			self.iterator = iterable.__iter__()
+			self.parent = parent
+		
+		def __iter__(self):
+			return self
+
+		def __next__(self):
+			if self.parent.shouldTerminate:
+				raise StopIteration()
+			else:
+				return self.iterator.__next__()
+
+	class SafeReversed:
+		def __init__(self, parent, reversible:Reversible):
+			self.iterator = reversed(reversible)
+		
+			self.parent = parent
+		
+		def __iter__(self):
+			return self
+		
+		def __next__(self):
+			if self.parent.shouldTerminate:
+				raise StopIteration()
+			else:
+				return self.iterator.__next__()
+	
 	__shouldTerminate = False
 	__subTask = None
 	__subProcess = None
@@ -60,18 +102,24 @@ class Terminable:
 	def terminate(self):
 		self.__shouldTerminate = True
 
-		if self.__subTask != None:
+		if self.__subTask is not None:
 			self.__subTask.terminate()
 		
-		if self.__subProcess != None:
+		if self.__subProcess is not None:
 			self.__subProcess.kill()
 	
 	def setSubTask(self, var):
-		self.__subTask = var
+		self.__subTask:Terminable = var
+
+		return var
+
+	def clearSubTask(self):
+		self.__subTask = None
 	
 	def setSubProcess(self, subProcess):
 		self.__subProcess = subProcess
 	
+	@property
 	def shouldTerminate(self):
 		return self.__shouldTerminate
 
@@ -227,4 +275,8 @@ class Pack(Exportable):
 		...
 
 
-SafeRange = Terminable.SafeRange
+
+class SafeRange(Terminable.SafeRange): ...
+class SafeEnumerate(Terminable.SafeEnumerate): ...
+class SafeIter(Terminable.SafeIter): ...
+class SafeReversed(Terminable.SafeReversed): ...

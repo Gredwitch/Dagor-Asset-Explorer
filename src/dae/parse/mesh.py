@@ -8,7 +8,7 @@ import math
 # from math import *
 from struct import unpack
 from util.fileread import *
-from util.terminable import SafeRange, Terminable, FilePathable
+from util.terminable import SafeRange, Terminable, FilePathable, SafeIter
 from util.enums import *
 
 # from misc import pprint, loadDLL
@@ -17,134 +17,7 @@ from util.enums import *
 # from traceback import print_exc as trace
 
 
-
-class MaterialData:
-	def __init__(self):
-		self.diffuse = None
-		self.mask = None
-		self.normal = None
-		self.ambientOcclusion = None
-
-		self.two_sided = False
-
-		self.detail = []
-		self.detailNormal = []
-
-		self.name = None
-
-		self.diff = (0, 0, 0, 1)
-		self.amb = (0, 0, 0, 1)
-		self.emis = (0, 0, 0, 1)
-		self.spec = (0, 0, 0, 1)
-
-		self.cls = None
-		self.par = None
-
-		self.properties = {}
-	
-	def __ftm(self, tex:str): # format texture to material
-		tex = tex.split("*")[0]
-		splitted = tex.split("_")
-
-		if len(splitted[-1]) > 2:
-			return tex
-		else:
-			return "_".join(splitted[:-1])
-	
-	def __mn(self, *args): # make name
-		return "_".join(args)
-
-	def __generateName__(self):
-		formattedDetail = None
-
-		if len(self.detail) > 0:
-			formattedDetail = []
-
-			for tex in self.detail:
-				f = self.__ftm(tex)
-
-				if f in formattedDetail or f == self.diffuse:
-					continue
-				
-			formattedDetail.append(f)
-		
-		if len(self.detail) < len(self.detailNormal):
-			if formattedDetail is None:
-				formattedDetail = []
-
-			for tex in self.detailNormal:
-				f = self.__ftm(tex)
-
-				if f in formattedDetail or f == self.diffuse:
-					continue
-				
-				formattedDetail.append(f)
-
-		if self.diffuse is None:
-			if self.mask is None:
-				if formattedDetail is None:
-					return self.cls
-				else:
-					return self.__mn(self.cls, *formattedDetail)
-			else:
-				if formattedDetail is None:
-					return self.cls + "_" + self.__ftm(self.mask)
-				else:
-					return self.__mn(self.cls, self.__ftm(self.mask), *formattedDetail)
-
-		
-		if self.mask is None or self.mask == self.diffuse:
-			if formattedDetail is None:
-				return self.__ftm(self.diffuse)
-			else:
-				return self.__mn(self.diffuse, *formattedDetail)
-		else:
-			if formattedDetail is None:
-				return self.__mn(self.__ftm(self.diffuse), self.__ftm(self.mask))
-			else:
-				return self.__mn(self.__ftm(self.diffuse), self.__ftm(self.mask), *formattedDetail)
-
-	def getTexFileName(self, tex:str):
-		return tex.split("*")[0]
-	
-
-	def addTexSlot(self, slotName:str, tex:str):
-		if slotName == "t0":
-			self.diffuse = tex
-		elif slotName == "t1":
-			self.mask = tex
-		elif slotName == "t2":
-			self.normal = tex
-		elif tex[-4:] == "_ao*":
-			self.ambientOcclusion = tex
-		elif tex[-3] == "_n*":
-			self.detailNormal.append(tex)
-		else:
-			self.detail.append(tex)
-	
-	def getName(self):
-		if self.name is None:
-			self.name = self.__generateName__()
-		
-		return self.name
-	
-	def setName(self, name:str):
-		self.name = name
-	
-	def __eq__(self, other):
-		return (self.diffuse == other.diffuse and
-				self.normal == other.normal and 
-				self.ambientOcclusion == other.ambientOcclusion and (
-					(self.mask == other.mask) or 
-					(self.mask == self.diffuse and other.mask is None) or 
-					(other.mask == other.diffuse and self.mask is None)) and
-				self.detail == other.detail and 
-				self.detailNormal == other.detailNormal and
-				# self.cls == other.cls and
-				# self.par == other.par and
-				self.properties == other.properties)
-
-class ShaderMesh:
+class ShaderMesh(Terminable):
 	class Elem:
 		def __repr__(self):
 			return f"<ShaderMesh::RElem e={self.ShaderElementPtr} mat={self.mat} vData={self.vData} vdOrderIndex={self.vdOrderIndex} startV={self.startV} numV={self.numV} startI={self.startI} numFace={self.numFace} baseVertex={self.baseVertex}>"
@@ -169,7 +42,7 @@ class ShaderMesh:
 
 		file.seek(8, 1)
 
-		self.stageEndElemIdx = list(readShort(file) for i in range(8))
+		self.stageEndElemIdx = list(readShort(file) for _ in SafeRange(self, 8))
 		
 		self._deprecatedMaxMatPass = readEx(4, file, True)
 		self._resv = readInt(file)
@@ -194,18 +67,20 @@ class ShaderMesh:
 		log.log(f"stage={self.stageEndElemIdx} maxMatPass={self._deprecatedMaxMatPass} resv={self._resv} cnt={cnt}")
 		log.addLevel()
 
-		self.elems = tuple(self.Elem(file) for i in range(cnt))
+		self.elems = tuple(self.Elem(file) for i in SafeRange(self, cnt))
 		
 		log.subLevel()
 
-class InstShaderMeshResource:
+class InstShaderMeshResource(Terminable):
 	def __init__(self, file:BinFile):
 		sz = readInt(file)
 		resv = readInt(file)
 
 		assert resv == 0
 
-		self.shaderMesh = ShaderMesh(file.readBlock(sz))
+		self.shaderMesh = self.setSubTask(ShaderMesh(file.readBlock(sz)))
+
+		self.clearSubTask()
 	
 
 class MatVData(Terminable, FilePathable): # stores material and vertex data :D	
@@ -339,7 +214,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		log.log(f"Computing {cnt} materials @ {ofs}")
 		log.addLevel()
 
-		self.__materials = tuple(self.__processMaterial__(self.Material(), ofs, i) for i in range(cnt))
+		self.__materials = tuple(self.__processMaterial__(self.Material(), ofs, i) for i in SafeRange(self, cnt))
 
 		log.subLevel()
 
@@ -413,7 +288,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		log.log(f"Computing {cnt} global vertex data @ {ofs}")
 		log.addLevel()
 
-		self.__gvdata = tuple(self.GlobalVertexData(file.readBlock(0x20), ofs, i) for i in range(cnt))
+		self.__gvdata = tuple(self.GlobalVertexData(file.readBlock(0x20), ofs, i) for i in SafeRange(cnt))
 
 		self.__vdStartOfs = ofs + cnt * 0x20
 
@@ -428,9 +303,10 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 	#
 	
 	class VertexData(Terminable):
-		class __decodeIndexSequence__(object): # i haven't cleaned this up yet and i don't think i ever will, who cares anyway
-			class __byteArrayGen__(object):
-				def __init__(self,data:bytes,offset:int,size:int):
+		class __decodeIndexSequence__(): # i haven't cleaned this up yet and i don't think i ever will, who cares anyway
+			class __byteArrayGen__():
+				def __init__(self, parent:Terminable, data:bytes, offset:int, size:int):
+					self.parent = parent
 					self.data = data
 					self.offset = offset
 					self.size = size
@@ -440,7 +316,10 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 					return self
 
 				def __next__(self):
-					return self.next()
+					if self.parent.shouldTerminate:
+						raise StopIteration()
+					else:
+						return self.next()
 
 				def next(self):
 					if not self.done and self.offset < self.size:
@@ -461,7 +340,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				self.count = 0
 				# self.lastCur = None
 				self.fucking = False
-				self.mvd = mvd
+				self.mvd:MatVData = mvd
 
 			def __iter__(self):
 				return self
@@ -470,7 +349,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				return self.next()
 
 			def decodeLebOld(self):
-				a = bytearray(x for x in self.__byteArrayGen__(self.data,self.offset,self.size))
+				a = bytearray(x for x in self.__byteArrayGen__(self.mvd, self.data, self.offset, self.size))
 				sz = len(a)
 				self.offset += sz
 
@@ -490,7 +369,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 					decoded = v14 & 0x7F
 					v16 = 7
 
-					for i in range(4):
+					for _ in SafeRange(self.mvd, 4):
 						v18 = self.data[self.offset]
 						self.offset += 1
 						v19 = (v18 & 0x7F) << v16
@@ -885,20 +764,20 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 			log.log(f"Exporting {len(verts)} vertices")
 
-			for v in verts:
+			for v in SafeIter(self, verts):
 				obj += f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n"
 			
 			log.log(f"Exporting {len(UVs)} UVs")
 
-			for v in UVs:
+			for v in SafeIter(self, UVs):
 				obj += f"vt {v[0]:.4f} {v[1]:.4f}\n"
 
 			log.log(f"Exporting {len(faces)} faces")
 			
-			for face in (faces):
+			for face in SafeIter(self, faces):
 				f = ""
 
-				for idx in face:
+				for idx in SafeIter(self, face):
 					idx += 1
 
 					f += f" {idx}/{idx}"
@@ -928,7 +807,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 		file.seek(self.__vdStartOfs, 0)
 
-		for i in range(0, idx):
+		for i in SafeRange(self, 0, idx):
 			file.seek(self.__gvdata[i].getFullVertexDataSz(), 1)
 		
 		sz = gvData.getFullVertexDataSz()

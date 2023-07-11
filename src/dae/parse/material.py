@@ -7,7 +7,7 @@ sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 import PIL
 import util.log as log
 from util.fileread import *
-from util.terminable import Packed, Pack
+from util.terminable import Packed, Pack, SafeIter, SafeRange, SafeEnumerate, SafeReversed, Terminable
 from util.decompression import zstdDecompress, oodleDecompress, zlibDecompress, lzmaDecompress
 from parse.mesh import MatVData
 from util.enums import *
@@ -257,7 +257,7 @@ class DDSx(Packed):
 			images = []
 
 
-			for level in range(self.__header.levels - 1, -1, -1):
+			for level in SafeRange(self, self.__header.levels - 1, -1, -1):
 				width = w // (2 ** level)
 				height = h // (2 ** level)
 
@@ -267,7 +267,7 @@ class DDSx(Packed):
 
 			data = bytearray()
 
-			for image in reversed(images):
+			for image in SafeReversed(self, images):
 				data.extend(image)
 		
 		
@@ -370,14 +370,14 @@ class DDSxTexturePack2(Pack): # TODO: Add logs
 		file.seek(8, 1)
 
 		self.__ddsxHeadersOfs = readInt(file)
-		# self.__ddsxHeaders:list[DDSx.Header] = [None for _ in range(readInt(file))]
+		# self.__ddsxHeaders:list[DDSx.Header] = [None for _ in SafeRange(self, readInt(file))]
 		if readInt(file) != fileCnt:
 			raise Exception("ddsxHeader cnt != fileCnt")
 
 		file.seek(8, 1)
 
 		self.__ddsxRecordsOfs = readInt(file) + 0xC
-		# self.__ddsxRecords:list = [None for _ in range(readInt(file))]
+		# self.__ddsxRecords:list = [None for _ in SafeRange(self, readInt(file))]
 		if readInt(file) != fileCnt:
 			raise Exception("ddsxRecord cnt != fileCnt")
 
@@ -387,7 +387,7 @@ class DDSxTexturePack2(Pack): # TODO: Add logs
 
 		self.__files:list[DDSx] = []
 
-		for i in range(fileCnt):
+		for i in SafeRange(self, fileCnt):
 			ddsx = self.__readDDSx__(file, i)
 
 			if ddsx is not None:
@@ -426,7 +426,7 @@ class DDSxTexturePack2(Pack): # TODO: Add logs
 		return self.__files[id]
 	
 	def getDDSxByName(self, name:str):
-		for k, v in enumerate(self.__nameMap):
+		for k, v in SafeRange(self, self.__nameMap):
 			if v == name:
 				return self.getDDSxById(k)
 				
@@ -435,7 +435,7 @@ class DDSxTexturePack2(Pack): # TODO: Add logs
 	def getPackedFiles(self) -> list[DDSx, False]:
 		return self.__files
 
-class MaterialData: # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
+class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
 	def __init__(self):
 		self.diffuse = None
 		self.mask = None
@@ -477,7 +477,7 @@ class MaterialData: # TODO: rewrite with actual shader-based texture param names
 		if len(self.detail) > 0:
 			formattedDetail = []
 
-			for tex in self.detail:
+			for tex in SafeIter(self, self.detail):
 				f = self.__ftm(tex)
 
 				if f in formattedDetail or f == self.diffuse:
@@ -489,7 +489,7 @@ class MaterialData: # TODO: rewrite with actual shader-based texture param names
 			if formattedDetail is None:
 				formattedDetail = []
 
-			for tex in self.detailNormal:
+			for tex in SafeIter(self.detailNormal):
 				f = self.__ftm(tex)
 
 				if f in formattedDetail or f == self.diffuse:
@@ -556,7 +556,7 @@ class MaterialData: # TODO: rewrite with actual shader-based texture param names
 		
 		splitted = self.par.split("=")
 
-		for i in range(0, len(splitted) - 1, 2):
+		for i in SafeRange(self, 0, len(splitted) - 1, 2):
 			params[splitted[i]] = splitted[i + 1]
 
 		return params
@@ -574,7 +574,7 @@ class MaterialData: # TODO: rewrite with actual shader-based texture param names
 				# self.par == other.par and
 				self.properties == other.properties)
 
-class MaterialTemplateLibrary:
+class MaterialTemplateLibrary(Terminable):
 	class Material:
 		def __repr__(self):
 			return f"newmtl {self.material.getName()}\n{self.getFormattedParams()}"
@@ -618,7 +618,7 @@ class MaterialTemplateLibrary:
 		def getFormattedParams(self):
 			formatted = ""
 
-			for k in self.params:
+			for k in SafeIter(self, self.params):
 				formatted += f"\t{k} {self.params[k]}\n"
 
 			return formatted
@@ -635,7 +635,7 @@ class MaterialTemplateLibrary:
 		def getBestTex(self, ddsx:list[DDSx]):
 			best = ddsx[0]
 			
-			for i in range(1, len(ddsx)):
+			for i in SafeRange(self, 1, len(ddsx)):
 				cur = ddsx[i]
 
 				if cur.getPixelCnt() > best.getPixelCnt():
@@ -689,12 +689,12 @@ class MaterialTemplateLibrary:
 			
 
 	def __init__(self, materials:list[MaterialData]):
-		self.__mats = tuple(self.Material(material) for material in materials)
+		self.__mats = tuple(self.Material(material) for material in SafeIter(self, materials))
 	
 	def getMTL(self):
 		mtl = ""
 
-		for v in self.__mats:
+		for v in SafeIter(self, self.__mats):
 			mtl += f"{v}"
 
 		return mtl
@@ -703,7 +703,7 @@ class MaterialTemplateLibrary:
 		log.log("Exporting MTL textures")
 		log.addLevel()
 
-		for mat in self.__mats:
+		for mat in SafeIter(self.__mats):
 			log.log(f"Exporting textures from {mat.material.getName()}")
 			log.addLevel()
 
@@ -713,16 +713,19 @@ class MaterialTemplateLibrary:
 		
 		log.subLevel()
 
-def computeMaterialNames(mats:list[MaterialData]):
+def computeMaterialNames(mats:list[MaterialData], parent:Terminable = None):
 	log.log("Computing material names")
 	log.addLevel()
 	
-	for k, mat in enumerate(mats):
+	iterator = (lambda x: SafeEnumerate(parent, x)) if parent is not None else (lambda x: enumerate(x))
+
+	for k, mat in iterator(mats):
 		log.log(f"Materials #{k}: {mat.getName()}")
 
 		cnt = 1
 
-		for mat2 in mats:
+
+		for mat2 in iterator(mats):
 			if mat is mat2:
 				continue
 			
@@ -735,16 +738,18 @@ def computeMaterialNames(mats:list[MaterialData]):
 
 	log.subLevel()
 
-def generateMaterialData(textures:list[str], mvdMats:list[MatVData.Material]):
+def generateMaterialData(textures:list[str], mvdMats:list[MatVData.Material], parent:Terminable = None):
 	materials:list[MaterialData] = []
 
-	for k, v in enumerate(mvdMats):
+	iterator = (lambda x: SafeEnumerate(parent, x)) if parent is not None else (lambda x: enumerate(x))
+
+	for k, v in iterator(mvdMats):
 		mat = MaterialData()
 
 		mat.cls = v.shaderClass
 		mat.par = ""
 		
-		for texId, texKey in enumerate(v.textures):
+		for texId, texKey in iterator(v.textures):
 			if texKey == 0xFFFFFFFF:
 				continue
 			
