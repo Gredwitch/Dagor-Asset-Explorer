@@ -15,12 +15,14 @@ from gui.customtreeview import CustomTreeView, AssetItem, FolderItem
 from gui.progressDialog import ProgressDialog, BusyProgressDialog
 from util.misc import openFile, getResPath, getUIPath
 from util.assetmanager import AssetManager
+from util.settings import SETTINGS
 from parse.gameres import GameResDesc
 from parse.realres import RealResData
 from parse.material import DDSx
 from util.assetcacher import AssetCacher
 from util.enums import *
 from util.terminable import Exportable, Pack, Terminable
+from gui.settingsDialog import SettingsDialog
 from functools import partial
 from traceback import format_exc
 
@@ -72,6 +74,7 @@ class MainWindow(QMainWindow):
 	actionOpenFiles:QAction
 	actionUnmount:QAction
 	actionClose:QAction
+	actionSettings:QAction
 
 	def __init__(self):
 		super().__init__()
@@ -88,6 +91,7 @@ class MainWindow(QMainWindow):
 		self.actionOpenFolder.triggered.connect(self.openFolder)
 		self.actionOpenFiles.triggered.connect(self.openAssets)
 		self.actionUnmount.triggered.connect(self.unmountAssets)
+		self.actionSettings.triggered.connect(self.openSettings)
 
 		self.threadPool = QThreadPool()
 		self.activeTerminable:Terminable = None
@@ -98,6 +102,10 @@ class MainWindow(QMainWindow):
 		
 		self.show()
 	
+	def openSettings(self):
+		settings = SettingsDialog(self)
+		settings.exec_()
+
 	def unmountAssets(self):
 		for v in self.clearItems: 
 			try: 

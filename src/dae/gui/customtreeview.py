@@ -1,5 +1,5 @@
 import sys
-from os import path, system
+from os import path, system, mkdir
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
@@ -7,7 +7,7 @@ import util.log as log
 from PyQt5.QtWidgets import QAbstractItemView, QTreeView, QLineEdit, QHeaderView, QMenu, QAction, QStyledItemDelegate, QFileDialog, QMainWindow
 from PyQt5.QtCore import QMimeData, Qt, QSortFilterProxyModel, QPoint, QFileInfo
 from PyQt5.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QStandardItemModel, QStandardItem, QIcon
-from util.misc import formatBytes, getResPath, openFile
+from util.misc import formatBytes, getResPath, openFile, ROOT_FOLDER
 from util.terminable import Exportable, Packed, Pack, Terminable
 from util.enums import *
 from abc import abstractmethod
@@ -18,6 +18,8 @@ from parse.realres import RendInst, DynModel
 from parse.gameres import GameResourcePack
 from traceback import format_exc
 from gui.progressDialog import MessageBox
+from util.settings import SETTINGS
+from gui.previewDialog import PreviewDialog
 
 
 FOLDER_ICO_PATH = getResPath("folder.bmp")
@@ -74,6 +76,7 @@ class SimpleItem:
 				level = log.curLevel
 
 				try:
+					# menu.addAction(PreviewModel(menu, self, 0))
 					menu.addAction(ExportToOBJ(menu, self, 0))
 
 					if isinstance(asset, DynModel):
@@ -304,14 +307,20 @@ class CopyPathToClipboard(CustomAction):
 		return "Copy path to clipboard"
 
 
+
 class SaveAction(ThreadedAction):
 	def preRun(self):
-		dialog = openFile(title = "Save to", fileMode = QFileDialog.DirectoryOnly)
+		if SETTINGS.getValue(SETTINGS_OUTPUT_FOLDER):
+			self.output = ROOT_FOLDER
 
-		if dialog == None:
-			return
-		
-		self.output = dialog.selectedFiles()[0]
+			self.makeOutputFolder(True, "output")
+		else:
+			dialog = openFile(title = "Save to", fileMode = QFileDialog.DirectoryOnly)
+
+			if dialog == None:
+				return
+			
+			self.output = dialog.selectedFiles()[0]
 
 		return self.output is not None
 
@@ -326,6 +335,17 @@ class SaveAction(ThreadedAction):
 	@abstractmethod
 	def save(self, output:str):
 		...
+	
+	def makeOutputFolder(self, shouldMakeFolder:bool, folderName:str):
+		if not shouldMakeFolder:
+			return self.output
+		
+		self.output = path.join(self.output, folderName)
+
+		if not path.exists(self.output):
+			mkdir(self.output)
+		
+		return self.output
 
 
 class Extract(SaveAction):
@@ -363,6 +383,9 @@ class ExtractAll(SaveAction):
 	
 	def save(self, output:str):
 		asset:Pack = self.item.asset
+
+		output = self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXTRACT_FOLDER), asset.name)
+		
 		self.setTerminable(asset)
 
 		packedFiles = asset.getPackedFiles()
@@ -415,10 +438,13 @@ class ExportAllToDDS(SaveAction):
 	
 	def save(self, output:str):
 		asset:DDSxTexturePack2 = self.item.asset
+		output = self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXPORT_FOLDER), asset.name)
 		self.setTerminable(asset)
 
 		packedFiles = asset.getPackedFiles()
 		fileCnt = len(packedFiles)
+
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
 
 		for k, v in enumerate(packedFiles):
 			if self.handleTermination(v):
@@ -426,7 +452,23 @@ class ExportAllToDDS(SaveAction):
 
 			self.setTaskStatus(f"Exporting {v.name}.dds... ({k + 1}/{fileCnt})")
 
-			v.exportDDS(output)
+			level = log.curLevel
+			
+			log.log(f"Exporting {v.name}.dds... ({k + 1}/{fileCnt})")
+			log.addLevel()
+
+			try:
+				v.exportObj(0, output, exportTex)
+
+				log.subLevel()
+			except Exception as e:
+				print(format_exc())
+
+				self.setErrored()
+
+				log.subLevel(log.curLevel - level)
+
+			log.subLevel()
 
 			self.setTaskProgress((k + 1) / fileCnt)
 		
@@ -452,13 +494,47 @@ class ExportToOBJ(SaveAction):
 	def save(self, output:str):
 		asset:RendInst = self.item.asset
 		self.setTerminable(asset)
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
 		
-		asset.exportObj(self.lod, output)
+		asset.exportObj(self.lod, output, exportTex)
 
 		self.clearTerminable()
 		
 
 		self.setTaskProgress(1)
+
+class PreviewModel(CustomAction):
+	def __init__(self, parent, item: SimpleItem, lod:int):
+		self.lod = lod
+
+		super().__init__(parent, item)
+	
+	item:AssetItem
+
+	@property
+	def actionText(self) -> str:
+		return f"Preview LOD {self.lod}"
+	
+	@property
+	def taskTitle(self) -> str:
+		return f"Previewing {self.item.asset.getExportName(self.lod)}.obj"
+
+	# def save(self):
+	# 	asset:RendInst = self.item.asset
+	# 	self.setTerminable(asset)
+		
+	# 	obj = asset.getObj(self.lod)
+
+	# 	self.setTaskProgress(1)
+	# 	self.clearTerminable()
+
+	def run(self):
+		asset:RendInst = self.item.asset
+
+		PreviewDialog(self.mainWindow, asset.getObj(self.lod)).show()
+
+		
+		
 
 class ExportLODsToOBJ(SaveAction):
 	item:AssetItem
@@ -475,12 +551,13 @@ class ExportLODsToOBJ(SaveAction):
 		asset:RendInst = self.item.asset
 		self.setTerminable(asset)
 		asset.computeData()
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
 
 		for i in range(asset.lodCount):
 			if self.handleTermination(asset):
 				break
 
-			asset.exportObj(i, output)
+			asset.exportObj(i, output, exportTex)
 
 			self.setTaskProgress((i + 1) / asset.lodCount)
 		
@@ -499,10 +576,13 @@ class ExportAllToOBJ(SaveAction):
 	
 	def save(self, output:str):
 		asset:GameResourcePack = self.item.asset
+		output = self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXPORT_FOLDER), asset.name)
 		self.setTerminable(asset)
 
 		packedFiles = asset.getPackedFiles()
 		fileCnt = 0
+
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
 
 		for v in packedFiles:
 			if isinstance(v, RendInst):
@@ -520,8 +600,14 @@ class ExportAllToOBJ(SaveAction):
 
 				level = log.curLevel
 
+				log.log(f"Exporting {v.getExportName(0)}.obj... ({k}/{fileCnt})")
+				log.addLevel()
+				
+
 				try:
-					v.exportObj(0, output)
+					v.exportObj(0, output, exportTex)
+
+					log.subLevel()
 				except Exception as e:
 					print(format_exc())
 

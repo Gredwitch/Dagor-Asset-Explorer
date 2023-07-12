@@ -121,7 +121,7 @@ class AssetCacher:
 
 	@classmethod
 	def appendGameResDesc(cls, desc):
-		cls.__modelsDesc[desc.getFilePath()] = desc
+		cls.__modelsDesc[desc.filePath] = desc
 
 	@classmethod
 	def getModelTextures(cls, model:str) -> list[str]:

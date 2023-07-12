@@ -66,7 +66,9 @@ class CompressedData:
 			data = lzmaDecompress(self.cData)
 		elif self.cMethod == 0x80:
 			data = oodleDecompress(self.cData)
-		
+		else:
+			log.log(f"Unknown compression method {hex(self.cMethod)}", log.LOG_ERROR)
+			
 		if outName is not None and not path.exists(outName):
 			if data != None:
 				cFile = open(outName, "wb")
@@ -74,13 +76,16 @@ class CompressedData:
 				cFile.close()
 			
 				log.log(f"Wrote {len(data)} bytes to {outName}")
-			else:
-				log.log(f"Unknown compression method {hex(self.cMethod)}", log.LOG_ERROR)
 		
 		return data
 	
 	def decompressToBin(self):
-		return BinFile(self.decompress())
+		d = self.decompress()
+		
+		if d is None:
+			return None
+		else:
+			return BinFile(d)
 
 def compressBlock(data:bytes, cMethod:int, level:int = None):
 	if cMethod == 0x40:

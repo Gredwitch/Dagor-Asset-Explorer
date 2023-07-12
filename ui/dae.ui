@@ -61,6 +61,7 @@
     <addaction name="separator"/>
     <addaction name="actionUnmount"/>
     <addaction name="separator"/>
+    <addaction name="actionSettings"/>
     <addaction name="actionClose"/>
    </widget>
    <widget class="QMenu" name="menuView">
@@ -70,14 +71,8 @@
     <addaction name="actionCollapse"/>
     <addaction name="actionExpand"/>
    </widget>
-   <widget class="QMenu" name="menuMessage_me_on_discord_gredwitch">
-    <property name="title">
-     <string>Discord: gredwitch</string>
-    </property>
-   </widget>
    <addaction name="menuFile"/>
    <addaction name="menuView"/>
-   <addaction name="menuMessage_me_on_discord_gredwitch"/>
   </widget>
   <action name="actionOpenFolder">
    <property name="text">
@@ -124,9 +119,9 @@
     <string>Ctrl+Q</string>
    </property>
   </action>
-  <action name="actionOpenDesc">
+  <action name="actionSettings">
    <property name="text">
-    <string>Open GameResDesc</string>
+    <string>Settings...</string>
    </property>
   </action>
  </widget>

@@ -54,17 +54,24 @@ class Terminable:
 			else:
 				return self.cur
 
-	class SafeEnumerate(enumerate):
-		def __init__(self, parent, iterable:Iterable, start:int = ...):
-			super().__init__(iterable, start)
+	class SafeEnumerate:
+		def __init__(self, parent, iterable:Iterable, start:int = None):
+			if start is None:
+				self.iterator = enumerate(iterable)
+			else:
+				self.iterator = enumerate(iterable, start)
 
 			self.parent = parent
 		
+
+		def __iter__(self):
+			return self
+
 		def __next__(self):
 			if self.parent.shouldTerminate:
 				raise StopIteration()
 			else:
-				return super().__next__()
+				return self.iterator.__next__()
 
 	class SafeIter:
 		def __init__(self, parent, iterable:Iterable):

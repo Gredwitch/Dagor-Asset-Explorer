@@ -575,7 +575,7 @@ class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture
 				self.properties == other.properties)
 
 class MaterialTemplateLibrary(Terminable):
-	class Material:
+	class Material(Terminable):
 		def __repr__(self):
 			return f"newmtl {self.material.getName()}\n{self.getFormattedParams()}"
 
@@ -703,7 +703,7 @@ class MaterialTemplateLibrary(Terminable):
 		log.log("Exporting MTL textures")
 		log.addLevel()
 
-		for mat in SafeIter(self.__mats):
+		for mat in SafeIter(self, self.__mats):
 			log.log(f"Exporting textures from {mat.material.getName()}")
 			log.addLevel()
 
@@ -717,15 +717,16 @@ def computeMaterialNames(mats:list[MaterialData], parent:Terminable = None):
 	log.log("Computing material names")
 	log.addLevel()
 	
-	iterator = (lambda x: SafeEnumerate(parent, x)) if parent is not None else (lambda x: enumerate(x))
-
-	for k, mat in iterator(mats):
+	enumerateIt = (lambda x: SafeEnumerate(parent, x)) if parent is not None else (lambda x: enumerate(x))
+	iterIt = (lambda x: SafeIter(parent, x)) if parent is not None else (lambda x: iter(x))
+	
+	for k, mat in enumerateIt(mats):
 		log.log(f"Materials #{k}: {mat.getName()}")
 
 		cnt = 1
 
 
-		for mat2 in iterator(mats):
+		for mat2 in iterIt(mats):
 			if mat is mat2:
 				continue
 			
@@ -760,6 +761,8 @@ def generateMaterialData(textures:list[str], mvdMats:list[MatVData.Material], pa
 	return materials
 
 if __name__ == "__main__":
+	from gameres import GameResDesc
+
 	dxp = DDSxTexturePack2("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.dxp.bin")
 	
 	for ddsx in dxp.getAllDDSx():

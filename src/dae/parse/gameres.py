@@ -35,7 +35,7 @@ from parse.material import MaterialData, computeMaterialNames
 
 class GameResDesc(FilePathable, Terminable):
 	def __init__(self, filePath:str):
-		super(FilePathable, self).__init__(filePath)
+		super().__init__(filePath)
 
 		self.__datablock = None
 	

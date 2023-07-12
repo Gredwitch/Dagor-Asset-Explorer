@@ -288,7 +288,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		log.log(f"Computing {cnt} global vertex data @ {ofs}")
 		log.addLevel()
 
-		self.__gvdata = tuple(self.GlobalVertexData(file.readBlock(0x20), ofs, i) for i in SafeRange(cnt))
+		self.__gvdata = tuple(self.GlobalVertexData(file.readBlock(0x20), ofs, i) for i in SafeRange(self, cnt))
 
 		self.__vdStartOfs = ofs + cnt * 0x20
 
@@ -415,7 +415,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				return index
 
 			def getValidIndex(self):
-				if self.offset >= self.size or self.mvd.shouldTerminate():
+				if self.offset >= self.size or self.mvd.shouldTerminate:
 					raise StopIteration()
 
 				return self.getIndex()

@@ -341,7 +341,10 @@ class RendInst(RealResData):
 		matCnt = readInt(file)
 		
 		vdataNum = readInt(file)
-		mvdHdrSz = readInt(file)
+		
+		num = readInt(file)
+		self.mvdHdrSz = num & 0x3FFFFFFF
+		self.mvdHdrFlag = num != self.mvdHdrSz
 
 		if texCnt == matCnt == 0xFFFFFFFF:
 			log.log("Pulling material and texture count from GameResDesc") # TODO
@@ -400,10 +403,20 @@ class RendInst(RealResData):
 		log.log("Loading MatVData")
 		log.addLevel()
 
-		bin = CompressedData(file).decompressToBin()
-		mvd = MatVData(bin, self.name, self.textureCount, self.materialCount)
-		 
-		self._setMatVData(mvd)
+
+		if not self.mvdHdrFlag:
+			log.log("MVD flag not raised", LOG_WARN)
+
+			file.seek(0x10, 1)
+		else:
+			bin = CompressedData(file).decompressToBin()
+
+			if bin is not None:
+				mvd = MatVData(bin, self.name, self.textureCount, self.materialCount)
+				
+				self._setMatVData(mvd)
+			else:
+				log.log("MVD Bin is None", LOG_ERROR)
 		
 		log.subLevel()
 
@@ -551,7 +564,7 @@ class RendInst(RealResData):
 	def getExportName(self, lodId:int):
 		return f"{self.name}_{lodId}"
 
-	def exportObj(self, lodId:int, output:str = getcwd()):
+	def exportObj(self, lodId:int, output:str = getcwd(), exportTexture:bool = True):
 		log.log(f"Quick exporting LOD {lodId} as OBJ")
 		log.addLevel()
 
@@ -576,7 +589,8 @@ class RendInst(RealResData):
 			file.write(mtl.getMTL())
 			file.close()
 
-			mtl.exportTextures(output)
+			if exportTexture:
+				mtl.exportTextures(output)
 
 			log.subLevel()
 
