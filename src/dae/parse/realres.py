@@ -1295,7 +1295,7 @@ class Anim2Data(RealResData):
 	def classIconName(self):
 		return "asset_a2d.bmp"
 
-class AnimTree(RealResData):
+class AnimChar(RealResData):
 	@classmethod
 	@property
 	def staticClassId(cls) -> int:
@@ -1309,7 +1309,7 @@ class AnimTree(RealResData):
 	@classmethod
 	@property
 	def classNiceName(cls):
-		return "AnimTree"
+		return "AnimChar"
 
 	@classmethod
 	@property
@@ -1456,7 +1456,7 @@ REALRES_CLASSES_LIST:tuple[type[RealResData]] = (
 	PhysObj,
 	FastPhys,
 	Anim2Data,
-	AnimTree,
+	AnimChar,
 	LandClass,
 	MaterialClass,
 	ImpostorData,

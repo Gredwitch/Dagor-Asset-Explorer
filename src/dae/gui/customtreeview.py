@@ -458,7 +458,7 @@ class ExportAllToDDS(SaveAction):
 			log.addLevel()
 
 			try:
-				v.exportObj(0, output, exportTex)
+				v.exportDDS(output)
 
 				log.subLevel()
 			except Exception as e:
