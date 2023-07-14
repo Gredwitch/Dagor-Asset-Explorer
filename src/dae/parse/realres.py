@@ -215,6 +215,9 @@ class GeomNodeTree(RealResData):
 		self.__nodesDict = {v.name:v for v in SafeIter(self, nodes)}
 	
 	def getNodeByName(self, name:str):
+		if self.__nodes is None:
+			self.__retrieveData__()
+		
 		if name in self.__nodesDict:
 			return self.__nodesDict[name]
 		
@@ -729,7 +732,7 @@ class DynModel(RendInst):
 		
 		file = self.getBin()
 
-		self.setGeomNodeTree(None)
+		self._findGeomNodeTree()
 
 		self._readHeader(file)
 		self._readMatVData(file)
@@ -739,6 +742,20 @@ class DynModel(RendInst):
 		self._readShaderSkinnedMesh(file)
 
 		self._setDataComputed()
+
+	def _findGeomNodeTree(self):
+		assets = AssetCacher.getCachedAsset(GeomNodeTree, f"{self.name}_skeleton")
+
+		if not assets or len(assets) == 0:
+			name = self.name.split("_")
+
+			if name[-1] == "dynmodel":
+				assets = AssetCacher.getCachedAsset(GeomNodeTree, f"{'_'.join(name[:-1])}_skeleton")
+		
+		if not assets or len(assets) == 0:
+			self.setGeomNodeTree(None)
+		else:
+			self.setGeomNodeTree(assets[0])
 
 	def _readModelData(self, file:BinBlock):
 		blockSz = readInt(file)
@@ -859,7 +876,8 @@ class DynModel(RendInst):
 	def setGeomNodeTree(self, skeleton:GeomNodeTree):
 		self.__skeleton = skeleton
 
-	def getGeomNodeTree(self):
+	@property
+	def geomNodeTree(self):
 		return self.__skeleton
 
 	def getObj(self, lodId:int): # TODO: rewrite - use vdorderindex and basevertex attributes
@@ -872,7 +890,7 @@ class DynModel(RendInst):
 		if self.materials is None:
 			log.log("No materials were loaded: material groups will be unnamed", LOG_WARN)
 		
-		skeleton = self.getGeomNodeTree()
+		skeleton = self.geomNodeTree
 
 		if skeleton is None:
 			log.log("No skeleton was loaded: rigids will not be positionned correctly", LOG_WARN)

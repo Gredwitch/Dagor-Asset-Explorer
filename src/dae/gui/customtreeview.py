@@ -79,10 +79,10 @@ class SimpleItem:
 					# menu.addAction(PreviewModel(menu, self, 0))
 					menu.addAction(ExportToOBJ(menu, self, 0))
 
-					if isinstance(asset, DynModel):
-						menu.addSeparator()
-						menu.addAction("WARNING: DynModel support is experimental")
-						menu.addSeparator()
+					# if isinstance(asset, DynModel):
+					# 	menu.addSeparator()
+					# 	menu.addAction("WARNING: DynModel support is experimental")
+					# 	menu.addSeparator()
 
 					asset.computeData()
 

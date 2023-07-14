@@ -17,7 +17,7 @@ from util.misc import openFile, getResPath, getUIPath
 from util.assetmanager import AssetManager
 from util.settings import SETTINGS
 from parse.gameres import GameResDesc
-from parse.realres import RealResData
+from parse.realres import GeomNodeTree
 from parse.material import DDSx
 from util.assetcacher import AssetCacher
 from util.enums import *
@@ -33,7 +33,7 @@ MAINWINDOWUI_PATH = getUIPath("dae.ui")
 SOUND_ICO_PATH = getResPath("asset_sound.bmp")
 SHOULD_CACHE:tuple[type[Exportable]] = (
 	DDSx,
-	RealResData
+	GeomNodeTree
 )
 
 def handleCaching(asset:Exportable):

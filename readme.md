@@ -22,8 +22,8 @@ DAE was designed to fulfill a few purposes:
 
 
 ## What's working:
-- Exporting most textures (I used (klensy's wt-tools)[https://github.com/klensy/wt-tools] as a base and added DXT10 support)
-- Exporting most RendInst
+- Exporting most textures (I used [klensy's wt-tools](https://github.com/klensy/wt-tools) as a base and added DXT10 support)
+- Exporting most RendInst and DynModels
 - ~~Exporting map prop layout~~ (I yet have to implement a dialog for this but it does work)
 - ~~Exporting sounds~~ (the program used to have FMod bank support, but I removed it after rewriting it and lacked the courage to add it back)
 
@@ -31,9 +31,9 @@ Models are exported to the OBJ format. An MTL file is automaticaly generated and
 
 
 ## What's not working:
-- Some DynModels may come out distorted
 - DynModels don't have skeleton support (so all meshes are in the center)
 - DynModels skinned meshes are not exported
+- (rare) some models and textures have squashed UVs
 
 ## Map prop export demo
 
