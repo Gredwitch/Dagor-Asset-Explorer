@@ -375,6 +375,8 @@ class RendInst(RealResData):
 
 		file.seek(8, 1)
 
+		# readNameMap(file, texCnt, texIndicesOfs - 0x10) # TODO: use readNameMap
+
 		nameMapData = file.read(texIndicesOfs - 0x10)
 		nameMap = []
 
@@ -387,7 +389,7 @@ class RendInst(RealResData):
 			
 			prev = next
 		
-		self.setTextures(nameMap)
+		self._setTextures(nameMap)
 
 	def _setTextures(self, textures:list[str]):
 		self.__textures = textures
@@ -497,6 +499,8 @@ class RendInst(RealResData):
 		vertexOrder:dict[int, list[ShaderMesh.Elem]] = {}
 
 		for k, elem in SafeEnumerate(self, shaderMeshElems):
+			elem:ShaderMesh.Elem
+
 			if not elem.vdOrderIndex in vertexOrder:
 				vertexOrder[elem.vdOrderIndex] = []
 			
@@ -527,6 +531,8 @@ class RendInst(RealResData):
 			elem.smid = k # TODO: put this in the class constructor
 
 		for orderElems in SafeIter(self, vertexOrder.values()):
+			orderElems:list[ShaderMesh.elem]
+			
 			for elem in SafeIter(self, orderElems):
 				log.log(f"Processing shader mesh {elem.smid}")
 				log.addLevel()
@@ -682,9 +688,11 @@ class DynModel(RendInst):
 				self.nodeId = readInt(file)
 				self._resv = readInt(file)
 
-		def __init__(self, file:BinBlock, lodIdx:int):
+		def __init__(self, file:BinBlock, lodIdx:int, occData:tuple[int, float]):
 			log.log(f"Processing LOD {lodIdx}")
 			log.addLevel()
+
+			ofs = file.tell()
 
 			hdrSz = readInt(file)
 			rigidCnt = readInt(file)
@@ -701,8 +709,7 @@ class DynModel(RendInst):
 
 			self.rigids = tuple(self.RigidObject(file.readBlock(0x20)) for i in range(rigidCnt))
 
-			if skinOfs > 0:
-				file.seek(hdrSz + 8, 1)
+			file.seek(occData[0] - (file.tell() - ofs), 1)
 			
 			log.subLevel()
 			
@@ -757,8 +764,15 @@ class DynModel(RendInst):
 
 			self.__noScale = True
 		
-		occ = tuple(unpack("IIfI", file.read(0x10)) for i in SafeRange(self, self.lodCount)) # occ table is acutally a float[4 * lodCnt]
-		
+		# occ = tuple(unpack("IIfI", file.read(0x10)) for i in SafeRange(self, self.lodCount))
+		self.__occ = tuple(self._readOcc(file) for i in SafeRange(self, self.lodCount))
+	
+	def _readOcc(self, file:BinBlock):
+		occ = unpack("Qf", file.read(0xC))
+
+		file.seek(0x4, 1)
+
+		return occ
 
 	def _readSceneNodes(self, file:BinBlock):
 		log.log("Processing scene nodes")
@@ -795,7 +809,7 @@ class DynModel(RendInst):
 
 		log.log(f"Processed {skinNodeCnt} skin nodes")
 
-		# file.seek(4, 1)
+		file.seek(((4 - (skinNodeCnt % 4)) * 2) % 8, 1)
 
 		log.subLevel()
 
@@ -805,7 +819,7 @@ class DynModel(RendInst):
 		log.log(f"Processing {lodCnt} LODs")
 		log.addLevel()
 		
-		self.__lods = tuple(self.Lod(file, i) for i in SafeRange(self, lodCnt))
+		self.__lods = tuple(self.Lod(file, i, self.__occ[i]) for i in SafeRange(self, lodCnt))
 
 		log.subLevel()
 
@@ -885,16 +899,21 @@ class DynModel(RendInst):
 		log.log("Processing nodes")
 		log.addLevel()
 
-		# rootUndo = inverse_matrix(skeleton.getNodeByName("").wtm)
+		lodVertexOrder:list[dict[int, list[ShaderMesh.Elem]]] = [{} for _ in lodShaderMesh]
 
+		# rootUndo = inverse_matrix(skeleton.getNodeByName("").wtm)
+		
 		for shaderMeshId, shaderMesh in SafeEnumerate(self, lodShaderMesh):
+			vertexOrder = lodVertexOrder[shaderMeshId]
+			shaderMesh:ShaderMesh
+
 			rigid = lod.rigids[shaderMeshId]
 			nodeId = self.__skinNodes[rigid.nodeId]
 
 			name = self.__nodeNames[nodeId]
 			
-			log.log(f"Processing rigid {name}")
-			# log.log(f"Processing rigid {shaderMeshId=} {lod.rigids[shaderMeshId].nodeId=} {self.__skinNodes[lod.rigids[shaderMeshId].nodeId]=} {self.__skinNodes[shaderMeshId]=} {name}")
+			# log.log(f"Processing rigid {name}")
+			log.log(f"Processing rigid {shaderMeshId=} {lod.rigids[shaderMeshId].nodeId=} {self.__skinNodes[lod.rigids[shaderMeshId].nodeId]=} {self.__skinNodes[shaderMeshId]=} {name}")
 			log.addLevel()
 
 			objFaces += f"g {name}\n"
@@ -932,13 +951,20 @@ class DynModel(RendInst):
 			# VirtualDynModelEntity::setup
 
 			for k, elem in SafeEnumerate(self, shaderMesh.elems):
+				elem:ShaderMesh.Elem
+				
+				if not elem.vdOrderIndex in vertexOrder:
+					vertexOrder[elem.vdOrderIndex] = []
+				
 				# log.log(f"Processing shader mesh {k}")
-				log.addLevel()
+				# log.addLevel()
 
 				if vertexDatas[elem.vData] == None:
+					vertexData = mvd.getVertexData(elem.vData)
 					vertexDataOrder.append(elem.vData)
 
-					vertexData = mvd.getVertexData(elem.vData)
+					objVerts = ""
+					objUV = ""
 
 					verts, UVs = vertexData.getVertices(), vertexData.getUVs()
 
@@ -947,67 +973,81 @@ class DynModel(RendInst):
 					vCnt = len(verts)
 
 					for i in SafeRange(self, vCnt):
-						verts[i][0] *= self.__bpC255[0]
-						verts[i][1] *= self.__bpC255[1]
-						verts[i][2] *= self.__bpC255[2]
+						v = verts[i]
+
+						v[0] *= self.__bpC255[0]
+						v[1] *= self.__bpC255[1]
+						v[2] *= self.__bpC255[2]
+
+						objVerts += f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n"
 
 						uv = UVs[i]
 
 						objUV += f"vt {uv[0]:.4f} {uv[1]:.4f}\n"
 					
+					obj += objVerts + objUV
 					vOfs += vCnt
 				
-				vertexData = vertexDatas[elem.vData][0]
-				indiceOffset = vertexDatas[elem.vData][1]
-
-				faces = vertexData.getFaces()
-
-				objFaces += f"usemtl {self.getMaterialName(elem.mat)}\n"
-
-				vS = elem.startI // 3
+				vertexOrder[elem.vdOrderIndex].append(elem)
 				
+				# elem.smid = k # TODO: put this in the class constructor
 				
-				if node is not None:
-					verts = vertexDatas[elem.vData][2]
+			for orderElems in SafeIter(self, vertexOrder.values()):
+				orderElems:list[ShaderMesh.elem]
 				
-					for i in SafeRange(self, elem.startV, elem.startV + elem.numV):
-						vert = verts[i]
+				for elem in SafeIter(self, orderElems):
+					vertexData = vertexDatas[elem.vData][0]
+					indiceOffset = vertexDatas[elem.vData][1] + elem.baseVertex
 
-						if self.__noScale:
-							x, y, z = vectorTransform(tm, vert)
-						else:
-							x, y, z = vert
+					faces = vertexData.getFaces()
 
-						vert[0] = x + tm[0][3]
-						vert[1] = y + tm[1][3]
-						vert[2] = z + tm[2][3]
+					objFaces += f"usemtl {self.getMaterialName(elem.mat)}\n"
 
-
-				for i in SafeRange(self, vS, vS + elem.numFace):
-					face = faces[i]
-
-					f = ""
-
-					for idx in SafeIter(self, face):
-						idx += 1 + indiceOffset
-
-						f += f" {idx}/{idx}"
-						
-					if f == "":
-						continue
+					curFace = elem.startI // 3
 					
-					objFaces += f"f{f}\n"
+					
+					if node is not None:
+						verts = vertexDatas[elem.vData][2]
+					
+						for i in SafeRange(self, elem.startV, elem.startV + elem.numV):
+							vert = verts[i]
 
-				log.subLevel()
+							if self.__noScale:
+								x, y, z = vectorTransform(tm, vert)
+							else:
+								x, y, z = vert
 
+							vert[0] = x + tm[0][3]
+							vert[1] = y + tm[1][3]
+							vert[2] = z + tm[2][3]
+
+
+					for i in SafeRange(self, curFace, curFace + elem.numFace):
+						face = faces[i]
+
+						f = ""
+
+						for idx in SafeIter(self, face):
+							idx += 1 + indiceOffset
+
+							f += f" {idx}/{idx}"
+							
+						if f == "":
+							continue
+						
+						objFaces += f"f{f}\n"
+
+
+				
+
+				# break
 			
 			log.subLevel()
-		
-		for i in SafeIter(self, vertexDataOrder):
-			for vert in SafeIter(self, vertexDatas[i][2]):
-				x, y, z = vert
+		# for i in SafeIter(self, vertexDataOrder):
+		# 	for vert in SafeIter(self, vertexDatas[i][2]):
+		# 		x, y, z = vert
 
-				objVerts += f"v {-x:.6f} {y:.6f} {z:.6f}\n"
+		# 		objVerts += f"v {-x:.6f} {y:.6f} {z:.6f}\n"
 
 		log.subLevel()
 		# print(self.__bpC254)
@@ -1466,3 +1506,7 @@ REALRES_CLASSES_LIST:tuple[type[RealResData]] = (
 )
 
 REALRES_CLASSES_DICT:dict[int, type[RealResData]] = {v.staticClassId:v for v in REALRES_CLASSES_LIST}
+
+if __name__ == "__main__":
+	mdl = DynModel(r"C:\Users\Gredwitch\Documents\WTBS\DagorAssetExplorer\output\sturmpanzer_II.dyn")
+	mdl.exportObj(0)

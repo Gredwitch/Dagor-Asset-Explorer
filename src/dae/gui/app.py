@@ -12,7 +12,7 @@ from PyQt5.QtCore import pyqtSignal, QDir, QFileInfo, QDirIterator, QRunnable, Q
 from PyQt5.QtWidgets import QMainWindow, QGridLayout, QAction, QFileDialog, QApplication
 from PyQt5.QtGui import QIcon, QStandardItem
 from gui.customtreeview import CustomTreeView, AssetItem, FolderItem
-from gui.progressDialog import ProgressDialog, BusyProgressDialog
+from gui.progressDialog import ProgressDialog, BusyProgressDialog, MessageBox
 from util.misc import openFile, getResPath, getUIPath
 from util.assetmanager import AssetManager
 from util.settings import SETTINGS
@@ -324,6 +324,9 @@ class App(QApplication):
 				self.progressDialog = ProgressDialog(self.window)
 			elif dialogType == DIALOG_STATUS:
 				self.progressDialog = BusyProgressDialog(self.window)
+			elif dialogType == DIALOG_ERROR:
+				box = MessageBox("An error occured during the process. Check the console for details.")
+				box.exec_()
 
 	def handleDialogTitle(self, txt:str):
 		if self.progressDialog is not None:

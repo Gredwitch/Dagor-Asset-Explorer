@@ -5,7 +5,7 @@ sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 import util.log as log
 from PyQt5.QtWidgets import QAbstractItemView, QTreeView, QLineEdit, QHeaderView, QMenu, QAction, QStyledItemDelegate, QFileDialog, QMainWindow
-from PyQt5.QtCore import QMimeData, Qt, QSortFilterProxyModel, QPoint, QFileInfo
+from PyQt5.QtCore import pyqtSignal, QMimeData, Qt, QSortFilterProxyModel, QPoint, QFileInfo
 from PyQt5.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QStandardItemModel, QStandardItem, QIcon
 from util.misc import formatBytes, getResPath, openFile, ROOT_FOLDER
 from util.terminable import Exportable, Packed, Pack, Terminable
@@ -100,7 +100,7 @@ class SimpleItem:
 
 					log.subLevel(log.curLevel - level)
 
-					MessageBox("Failed to compute preliminary data. Check the console for details.")
+					MessageBox("Failed to compute preliminary data. Check the console for details.").exec_()
 
 			elif isinstance(asset, Pack):
 				menu.addAction(ExtractAll(menu, self))
@@ -260,7 +260,7 @@ class ThreadedAction(CustomAction):
 	@property
 	def cancelled(self):
 		return self.__cancel
-
+	
 	def __threadedRun__(self):
 		level = log.curLevel
 
@@ -274,9 +274,8 @@ class ThreadedAction(CustomAction):
 			log.subLevel(log.curLevel - level)
 		
 		if self.__error:
-			MessageBox("An error occured during the process. Check the console for details.")
-
-
+			self.mainWindow.setRequestedDialog(DIALOG_ERROR)
+		
 		self.mainWindow.setRequestedDialog(DIALOG_NONE)
 
 class OpenFileLocation(CustomAction):

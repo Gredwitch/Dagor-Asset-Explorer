@@ -27,8 +27,6 @@ class MessageBox(QtWidgets.QMessageBox):
 		self.setWindowTitle("Unfunny!")
 		self.setText(text)
 		self.setStandardButtons(QtWidgets.QMessageBox.Ok)
-		
-		self.exec()
 
 
 

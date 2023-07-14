@@ -36,6 +36,9 @@ class ShaderMesh(Terminable):
 
 			log.log(self)
 
+	def __repr__(self):
+		return f"stage={self.stageEndElemIdx} maxMatPass={self._deprecatedMaxMatPass} resv={self._resv} cnt={self.cnt}"
+
 	def __init__(self, file:BinFile):
 		ofs = readInt(file)
 		cnt = readInt(file)
@@ -63,8 +66,10 @@ class ShaderMesh(Terminable):
 			self.stageEndElemIdx[5] = cnt
 			self.stageEndElemIdx[6] = cnt
 			self.stageEndElemIdx[7] = cnt
+		
+		self.cnt = cnt
 
-		log.log(f"stage={self.stageEndElemIdx} maxMatPass={self._deprecatedMaxMatPass} resv={self._resv} cnt={cnt}")
+		log.log(self)
 		log.addLevel()
 
 		self.elems = tuple(self.Elem(file) for i in SafeRange(self, cnt))
@@ -94,12 +99,12 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		self.__dataComputed = False
 
 	def __repr__(self):
-		return f"<MVD {self.getName()} texCnt={self.__texCnt} matCnt={self.__matCnt} computed={self.__dataComputed}>"
+		return f"<MVD {self.name} texCnt={self.__texCnt} matCnt={self.__matCnt} computed={self.__dataComputed}>"
 
 	def save(self, output:str = getcwd()):
 		binData = self.__file.read()
 
-		output = path.normpath(f"{output}\\{self.getName()}.mvd")
+		output = path.normpath(f"{output}\\{self.name}.mvd")
 
 		file = open(output, "wb")
 
@@ -494,7 +499,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 					for i in SafeRange(self, vCnt):
 						verts.append(self.__unpackShortVertex__(file))
 
-						file.seek(6,1)
+						file.seek(6, 1)
 
 						UVs.append(self.__unpackShortUV__(file))
 				elif vStride == 24:
@@ -574,6 +579,16 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 						UVs.append(self.__unpackShortUV__(file))
 
 						file.seek(stride, 1)
+				elif vStride == 12:
+					shortVerts = True
+
+					for i in SafeRange(self, vCnt):
+						verts.append(self.__unpackShortVertex__(file))
+
+						file.seek(2, 1)
+
+						UVs.append(self.__unpackShortUV__(file))
+
 				# elif vStride == 12:
 				# shortVerts = True
 
@@ -820,7 +835,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		log.log(f"Quick exporting {idx} as OBJ")
 		log.addLevel()
 
-		fileName = f"{self.getName()}_{idx}.obj"
+		fileName = f"{self.name}_{idx}.obj"
 		obj = self.getVertexData(idx).getObj()
 
 		file = open(fileName, "w")

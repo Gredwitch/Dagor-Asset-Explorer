@@ -1,6 +1,6 @@
 
 import sys
-from os import path, getcwd
+from os import path, getcwd, stat
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
@@ -142,7 +142,7 @@ class FilePathable:
 		
 		self.__filePath = filePath
 		self.__name = name
-		self.__size = size
+		self.__size = size if size > 0 else stat(filePath).st_size
 
 	@property
 	def name(self):
