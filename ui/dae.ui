@@ -49,7 +49,7 @@
      <x>0</x>
      <y>0</y>
      <width>958</width>
-     <height>21</height>
+     <height>26</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
@@ -58,6 +58,7 @@
     </property>
     <addaction name="actionOpenFolder"/>
     <addaction name="actionOpenFiles"/>
+    <addaction name="actionOpenMap"/>
     <addaction name="separator"/>
     <addaction name="actionUnmount"/>
     <addaction name="separator"/>
@@ -122,6 +123,14 @@
   <action name="actionSettings">
    <property name="text">
     <string>Settings...</string>
+   </property>
+  </action>
+  <action name="actionOpenMap">
+   <property name="text">
+    <string>Open level file</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Alt+O</string>
    </property>
   </action>
  </widget>
