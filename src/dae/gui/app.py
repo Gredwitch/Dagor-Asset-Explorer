@@ -8,17 +8,19 @@ import util.log as log
 import gc
 # from PyQt5 import uic, QtWidgets, QtCore, QtGui
 from PyQt5.uic import loadUi
-from PyQt5.QtCore import pyqtSignal, QDir, QFileInfo, QDirIterator, QRunnable, QThreadPool
+from PyQt5.QtCore import pyqtSignal, QDir, QFileInfo, QDirIterator, QRunnable, QThreadPool, QObject
 from PyQt5.QtWidgets import QMainWindow, QGridLayout, QAction, QFileDialog, QApplication
 from PyQt5.QtGui import QIcon, QStandardItem
 from gui.customtreeview import CustomTreeView, AssetItem, FolderItem
 from gui.progressDialog import ProgressDialog, BusyProgressDialog, MessageBox
+from gui.mapDialog import MapExportDialog
 from util.misc import openFile, getResPath, getUIPath
 from util.assetmanager import AssetManager
 from util.settings import SETTINGS
 from parse.gameres import GameResDesc
-from parse.realres import GeomNodeTree
+from parse.realres import GeomNodeTree, DynModel, RendInst
 from parse.material import DDSx
+from parse.dbld import DagorBinaryLevelData
 from util.assetcacher import AssetCacher
 from util.enums import *
 from util.terminable import Exportable, Pack, Terminable
@@ -33,8 +35,13 @@ MAINWINDOWUI_PATH = getUIPath("dae.ui")
 SOUND_ICO_PATH = getResPath("asset_sound.bmp")
 SHOULD_CACHE:tuple[type[Exportable]] = (
 	DDSx,
-	GeomNodeTree
+	GeomNodeTree,
+	DynModel, # for maps
+	RendInst # for maps
 )
+
+DBLD_FILTER = ["Dagor Binary Level Data (*.bin)"]
+	
 
 def handleCaching(asset:Exportable):
 	for type in SHOULD_CACHE:
@@ -75,6 +82,7 @@ class MainWindow(QMainWindow):
 	actionUnmount:QAction
 	actionClose:QAction
 	actionSettings:QAction
+	actionOpenMap:QAction
 
 	def __init__(self):
 		super().__init__()
@@ -90,18 +98,27 @@ class MainWindow(QMainWindow):
 		self.actionClose.triggered.connect(self.close)
 		self.actionOpenFolder.triggered.connect(self.openFolder)
 		self.actionOpenFiles.triggered.connect(self.openAssets)
+		self.actionOpenMap.triggered.connect(self.openMap)
 		self.actionUnmount.triggered.connect(self.unmountAssets)
 		self.actionSettings.triggered.connect(self.openSettings)
 
 		self.threadPool = QThreadPool()
 		self.activeTerminable:Terminable = None
+		self.activeSubProcess = None
 		self.shouldTerminate = False
 		self.treeView.mainWindow = self
 
 		self.cachedIcons:dict[str:QIcon] = {}
+
+		self.__openMapDialog:MapExportDialog = None
 		
 		self.show()
 	
+	def openMap(self):
+		dialog = MapExportDialog(self)
+		self.__openMapDialog = dialog
+		dialog.exec_()
+
 	def openSettings(self):
 		settings = SettingsDialog(self)
 		settings.exec_()
@@ -135,6 +152,7 @@ class MainWindow(QMainWindow):
 		
 		self.mountAssets(dialog.selectedFiles())
 	
+	
 	def openAssets(self):
 		dialog = openFile(title = "Open assets", nameFilters = self.__FILE_FILTERS)
 
@@ -142,6 +160,31 @@ class MainWindow(QMainWindow):
 			return
 		
 		self.mountAssets(dialog.selectedFiles())
+	
+	def openLevelFile(self, enlisted:bool):
+		dialog = openFile(title = "Open level file", nameFilters = DBLD_FILTER, fileMode = QFileDialog.ExistingFile)
+
+		if dialog is None:
+			return
+		
+		self.loadMap(dialog.selectedFiles()[0], enlisted)
+		# self.loadMap("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_normandy.bin", enlisted)
+	
+	def loadMap(self, path:str, enlisted:bool):
+		map = DagorBinaryLevelData(path)
+		cellData:list[tuple[int, tuple[int, int], int, int]] = []
+
+		thread = MapLoadThread(self, map, cellData, enlisted)
+		thread.setAutoDelete(True)
+		thread.sig.finished.connect(partial(self.__mapLoadFinished, map, cellData))
+
+		self.threadPool.start(thread)
+	
+	def __mapLoadFinished(self, map:DagorBinaryLevelData, cellData:list):
+		if self.__openMapDialog is None:
+			return
+
+		self.__openMapDialog.mapLoadFinished(map, cellData)
 	
 	def mountAssets(self, paths:list[str]):
 		# self.activeThread = QRunnable(partial(self.__mountAssetsInternal__, paths))
@@ -178,6 +221,12 @@ class MainWindow(QMainWindow):
 	
 	def clearTerminable(self):
 		self.activeTerminable = None
+	
+	def setSubProcess(self, proc):
+		self.activeSubProcess = proc
+	
+	def clearSubProcess(self):
+		self.activeSubProcess = None
 
 	def exploreFileInfo(self, finfo:QFileInfo, parent:QStandardItem):
 		if self.shouldTerminate:
@@ -286,6 +335,9 @@ class MainWindow(QMainWindow):
 		if self.activeTerminable is not None:
 			self.activeTerminable.terminate()
 		
+		if self.activeSubProcess is not None:
+			self.activeSubProcess.kill()
+		
 		self.threadPool.waitForDone()
 		self.clearTerminable()
 
@@ -294,6 +346,70 @@ class MainWindow(QMainWindow):
 		log.subLevel(log.curLevel)
 		
 		self.setRequestedDialog(DIALOG_NONE)
+
+
+
+
+class MapLoadThread(QRunnable):
+	class Signals(QObject):
+		finished = pyqtSignal()
+
+		def __init__(self, *args, **kwargs):
+			super().__init__(*args, **kwargs)
+		
+	
+	def __init__(self, mainWindow:MainWindow, map:DagorBinaryLevelData, cellData:list, enlisted:bool):
+		super().__init__()
+
+		self.sig = MapLoadThread.Signals()
+		
+		self.map = map
+		self.cellData = cellData
+		self.mainWindow = mainWindow
+		self.enlisted = enlisted
+	
+	def run(self):
+		mainWindow = self.mainWindow
+		map = self.map
+		cellData = self.cellData
+		
+		
+		mainWindow.setRequestedDialog(DIALOG_STATUS)
+		
+		mainWindow.setTaskTitle("Loading map...")
+		mainWindow.setTaskStatus("Loading map data...")
+
+		try:
+			mainWindow.setTerminable(map)
+
+			map.computeData()
+
+			mainWindow.setTaskStatus("Loading cell entities...")
+
+			riGen = map.riGenLayers[0]
+
+			for ofs in riGen.riDataRel:
+				cell = riGen.riDataRel[ofs]
+
+				entities = {}
+				_, nonVegCnt, vegCnt = riGen.getCellEntities(cell.id, entities, self.enlisted, False, True)
+				cellData.append((cell.id,
+								riGen.getCellXY(cell), 
+								nonVegCnt,
+								vegCnt,
+								len(entities)))
+			
+			self.sig.finished.emit()
+		except Exception as e:
+			print(format_exc())
+
+			log.subLevel(log.curLevel)
+
+			mainWindow.setRequestedDialog(DIALOG_ERROR)
+
+		mainWindow.clearTerminable()
+
+		mainWindow.setRequestedDialog(DIALOG_NONE)
 
 
 class App(QApplication):

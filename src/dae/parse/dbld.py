@@ -1,22 +1,25 @@
 
+import sys
 from os import path, getcwd
 
+sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
-from fileread import *
-from decompression import CompressedData, zlibDecompress, zstdCompress, compressBlock
+
+from util.fileread import *
+from util.decompression import CompressedData, zlibDecompress, zstdCompress, compressBlock
 # from math import * #acos, degrees
-from terminable import Exportable
+from util.terminable import Exportable
 from struct import unpack, pack
-from enums import *
+from util.enums import *
 
-import log
+import util.log as log
 # from terminable import Exportable
-from mesh import MatVData, MaterialData, ShaderMesh
-from material import DDSx
-from datablock import loadDataBlock
+from parse.mesh import MatVData, ShaderMesh
+from parse.material import DDSx, MaterialData
+from parse.datablock import loadDataBlock
 from pprint import pprint
 
-from misc import loadDLL, matrix_mul
+from util.misc import loadDLL, matrix_mul
 import json
 import ctypes
 
@@ -110,19 +113,8 @@ class DagorBinaryLevelData(Exportable):
 			file.seek(blockSz - 4, 1)
 
 	
-	def __init__(self, filePath:str):
-		self.setFilePath(filePath)
-		self.setName(path.splitext(path.basename(filePath))[0])
-
-
-		self.isValid = False
-		
-		log.log(f"Loading map {self.getName()}")
-		log.addLevel()
-
-		self.__readFile__()
-
-		log.subLevel()
+	def __init__(self, filePath:str, name:str = None, size:int = 0):
+		super().__init__(filePath, name, size)
 	
 	def readTexName(self, file):
 		sz = readInt(file)
@@ -255,6 +247,7 @@ class DagorBinaryLevelData(Exportable):
 				
 				# return rigz.entCnt[c]:DagorBinaryLevelData.RendInstGenData.PregEntCounter
 				return c
+
 		class LandClassRec:
 			def __repr__(self):
 				return f"<LandClassRec @ {self.ofs}: name={self.landClassName} asset={self.asset} mask={hex(self.mask)}>"
@@ -287,6 +280,9 @@ class DagorBinaryLevelData(Exportable):
 
 				self.paletteRotationCount = readInt(file)
 		
+		def getCellXY(self, cell):
+			return (cell.id % self.numCellW, cell.id // self.numCellW)
+		
 		def __init__(self, file:BinFile, size:int):
 			self.rtData = readLong(file)
 
@@ -298,6 +294,7 @@ class DagorBinaryLevelData(Exportable):
 
 			file.seek(8, 1)
 
+			self.calculatedScale:list[float, float, float, float] = None
 			self.numCellW:int = readInt(file)
 			self.numCellH:int = readInt(file)
 			self.cellSz:int = readShort(file)
@@ -523,8 +520,11 @@ class DagorBinaryLevelData(Exportable):
 				
 				log.subLevel()
 		
-		def getCellEntities(self, cellId:int, entities:dict[str, list[tuple[float, float, float, float]]] = {}, enlisted:bool = False, vegetation:bool = False):
+		def getCellEntities(self, cellId:int, entities:dict[str, list[tuple[float, float, float, float]]] = {}, enlisted:bool = False, vegetation:bool = False, vegetationOnly:bool = False):
 			cell = self.cells[cellId]
+
+			nonVegCnt = 0
+			vegCnt = 0
 
 			log.log(f"Gathering entities for cell {cellId}")
 			log.addLevel()
@@ -554,10 +554,13 @@ class DagorBinaryLevelData(Exportable):
 			get_v482(v482, cell_xz_sz, htDelta)
 			v482 = v482[:4]
 
+			self.calculatedScale = v482
+
 			scaleFix = (
 				(1, 0, 0, 0),
 				(0, 1, 0, 0),
-				(0, 0, -1, 0),
+				(0, 0, 1, 0),
+				# (0, 0, -1, 0),
 				(0, 0, 0, 1),
 			)
 
@@ -605,25 +608,29 @@ class DagorBinaryLevelData(Exportable):
 								else:
 									loadedData = riData.read(24 + szAdd)
 									array = unpack("12h", loadedData[szAdd:szAdd + 24])
-
-								pos = tuple(cellOrigin[i] + array[(4 * (i + 1)) - 1] * v482[i] for i in range(3))
-								matrix = list(
-									list(array[i + j * 4] / 256 for i in range(3)) for j in range(3)
-								)
-
-								for l in matrix:
-									l.append(0)
 								
-								matrix.append((0, 0, 0, 1))
+								nonVegCnt += 1
+								
+								if not vegetationOnly:
+									pos = tuple(cellOrigin[i] + array[(4 * (i + 1)) - 1] * v482[i] for i in range(3))
+									matrix = list(
+										list(array[i + j * 4] / 256 for i in range(3)) for j in range(3)
+									)
 
-								matrix = matrix_mul(scaleFix, matrix)
+									for l in matrix:
+										l.append(0)
+									
+									matrix.append((0, 0, 0, 1))
 
-								entTab.append(((pos[0], pos[2], pos[1]), matrix))
+									matrix = matrix_mul(scaleFix, matrix)
 
-								# seek to (entCnter.riCount * (24 + szAdd)) - (entCnter.riCount - (2 * v49))
+									entTab.append(((pos[0], pos[2], pos[1]), matrix))
+
+									# seek to (entCnter.riCount * (24 + szAdd)) - (entCnter.riCount - (2 * v49))
 						else:
 							for _ in range(entCnter.riCount):
 								loadedData = riData.read(8 + szAdd)
+								vegCnt += 1
 
 								if vegetation:
 									array = unpack("4h", loadedData[:8])
@@ -650,8 +657,8 @@ class DagorBinaryLevelData(Exportable):
 					... # load from land class
 				
 			log.subLevel()
-
-			return entities
+			
+			return entities, nonVegCnt, vegCnt
 			
 	class LandMeshManager:
 		class LandMesh:
@@ -811,6 +818,14 @@ class DagorBinaryLevelData(Exportable):
 
 			log.subLevel()
 
+	def computeData(self):
+		log.log(f"Loading map {self.name}")
+		log.addLevel()
+
+		self.__readFile__()
+
+		log.subLevel()
+
 
 	def processBin(self, name:str, file:BinFile, absOfs:int):
 		if name == "RqRL":
@@ -848,7 +863,7 @@ class DagorBinaryLevelData(Exportable):
 		elif name == "TEX.":
 			pass
 		elif name == "lmap":
-			self.lmap = self.LandMeshManager(file, self.getName(), self.getFilePath())
+			self.lmap = self.LandMeshManager(file, self.name, self.filePath)
 		elif name == "HM2":
 			# if True:
 			# 	return
@@ -859,7 +874,7 @@ class DagorBinaryLevelData(Exportable):
 
 			try:
 				self.hm2CData = CompressedData(file)
-				self.hm2CData.decompress(self.getName() + ".hm2")
+				self.hm2CData.decompress(self.name + ".hm2")
 			except Exception as er:
 				log.log(f"Decompession failed: {er}", LOG_ERROR)
 		elif name == "RIGz":
@@ -885,7 +900,7 @@ class DagorBinaryLevelData(Exportable):
 
 				ofs = file.tell()
 
-				# riGen = self.processBin("RIGzPrim", BinFile(pack("B", layerIdx) + CompressedData(file).decompress(self.getName() + f"_{layerName}.rigz")), ofs + absOfs) # ADD ONE BYTE TO IDENTIFY LAYER IDX
+				# riGen = self.processBin("RIGzPrim", BinFile(pack("B", layerIdx) + CompressedData(file).decompress(self.name + f"_{layerName}.rigz")), ofs + absOfs) # ADD ONE BYTE TO IDENTIFY LAYER IDX
 				try:
 					cData = CompressedData(file).decompress()
 				except:
@@ -900,7 +915,7 @@ class DagorBinaryLevelData(Exportable):
 				self.riGenLayers.append(riGen)
 				
 				riGen.processRiDataRel(file.readBlock(readInt(file)))
-				# riGen.processRiDataRel(file.readBlock(readInt(file)), self.getName(), layerName)
+				# riGen.processRiDataRel(file.readBlock(readInt(file)), self.name, layerName)
 
 				log.subLevel()
 
@@ -941,7 +956,7 @@ class DagorBinaryLevelData(Exportable):
 
 			texIDs = unpack("I" * texNum, file.read(4 * texNum))
 
-			mvd = MatVData(self.getFilePath(), BinFile(CompressedData(file).decompress()), texNum, matNum, self.getName() + "_scn")
+			mvd = MatVData(self.filePath, BinFile(CompressedData(file).decompress()), texNum, matNum, self.name + "_scn")
 			rest = BinFile(zlibDecompress(file.read(file.getSize() - file.tell())))
 
 			self.sceneMVD = mvd
@@ -996,7 +1011,7 @@ class DagorBinaryLevelData(Exportable):
 			log.log("Processing LandRayTracerDump:")
 			log.addLevel()
 
-			self.processBin("ltdu", BinFile(cdata.decompress(self.getName() + ".ltdu")), 0)
+			self.processBin("ltdu", BinFile(cdata.decompress(self.name + ".ltdu")), 0)
 
 			log.subLevel()
 
@@ -1058,7 +1073,7 @@ class DagorBinaryLevelData(Exportable):
 	def __readFile__(self):
 		self.cdat = {}
 
-		filePath = self.getFilePath()
+		filePath = self.filePath
 
 		fileSz = path.getsize(filePath)
 		f = open(filePath, "rb")
@@ -1071,6 +1086,10 @@ class DagorBinaryLevelData(Exportable):
 		log.addLevel()
 
 		magic = file.read(8)
+
+		if magic != b"DBLD3x64":
+			raise Exception(f"Invalid magic: {magic}. Not a map file?")
+
 		d3dresCnt = readInt(file)
 		metaSz = readInt(file)
 
@@ -1253,7 +1272,7 @@ class DagorBinaryLevelData(Exportable):
 		log.log(f"Replacing RIGz @ {ofs}")
 		log.addLevel()
 
-		f = open(self.getFilePath(), "rb")
+		f = open(self.filePath, "rb")
 		data = f.read()
 		f.close()
 
@@ -1265,8 +1284,8 @@ class DagorBinaryLevelData(Exportable):
 		rest = oldRigz.readRest()
 
 		if primData is None:
-			log.log(f"Loading primary layer from {self.getName()}_primary.rigz")
-			f = open(f"{self.getName()}_primary.rigz", "rb")
+			log.log(f"Loading primary layer from {self.name}_primary.rigz")
+			f = open(f"{self.name}_primary.rigz", "rb")
 			primData = f.read()
 			f.close()
 
@@ -1329,7 +1348,7 @@ class DagorBinaryLevelData(Exportable):
 
 		log.log(f"Replacing RIGz Pregen @ {ofs}")
 
-		f = open(self.getFilePath(), "rb")
+		f = open(self.filePath, "rb")
 		data = f.read()
 		f.close()
 
@@ -1478,7 +1497,7 @@ class LandClass(Exportable): # landclasses used to automatically generated plant
 
 	
 	def __readFile__(self, file:BinFile):
-		# file.quickSave(self.getName() + ".lcls")
+		# file.quickSave(self.name + ".lcls")
 		
 		sz = readInt(file)
 
@@ -1491,13 +1510,13 @@ class LandClass(Exportable): # landclasses used to automatically generated plant
 
 
 if __name__ == "__main__":
-	import gameres
+	# import gameres
 	import os
 	# from assetcacher import ASSETCACHER
 
-	map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_urban_area_2x2.bin")
+	# map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_urban_area_2x2.bin")
 	# map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\battle_of_berlin_opera.bin")
-	# map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_normandy.bin")
+	map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_normandy.bin")
 
 	# primData = None
 	# toReplace = "D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_coastal_area_1x1.bin"
@@ -1578,10 +1597,28 @@ if __name__ == "__main__":
 					log.log(f"Failed to export {ent}", LOG_ERROR)
 			else:
 				log.log(f"Ignoring entity {ent}: rrd child returned a {ri}")
-	
-	entities = exportRiGen(map, write = True, enlisted = True, vegetation = False, cells = (528, ))
-	exportEnts(map, entities)
 
+	
+	map.computeData()
+	
+	riGen = map.riGenLayers[0]
+	# print(riGen.cellCnt)
+
+	from pprint import pprint
+	data = []
+	for ofs in riGen.riDataRel:
+		cell = riGen.riDataRel[ofs]
+
+		entities = {}
+		riGen.getCellEntities(cell.id, entities, False, False)
+		data.append((riGen.getCellXY(cell), len(entities)))
+		pprint(entities["normandy_village_shed_b"])
+
+		break
+	
+	# entities = exportRiGen(map, write = True, enlisted = True, vegetation = False, cells = (528, ))
+	# exportEnts(map, entities)
+	
 	log.log("Done")
 
 	"""

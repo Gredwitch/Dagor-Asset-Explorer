@@ -393,8 +393,6 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				d = (decoded >> 2) ^ -((decoded & 2) != 0) # stolen from gaijin
 				index = self.buffer[current] + d
 
-				if d == -self.buffer[current] and d < -1000:
-					log.log("Potential fucked faces detected", 2)
 				# print(self.count, d, index, self.buffer)
 
 				# self.count += 1
@@ -608,9 +606,9 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 					shortVerts = True
 					
 					for i in SafeRange(self, vCnt):
-						file.seek(8, 1)
-
 						verts.append(self.__unpackShortVertex__(file))
+
+						file.seek(8, 1)
 
 						file.seek(6, 1)
 
@@ -648,12 +646,29 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 						bigUVs = True # work around to bypass line "if not bigUVs"
 				else:
 					log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
-			# elif format == 6:
-			# 	if vStride == 28:
-			# 		for i in SafeRange(self, vCnt):
-			# 			verts.append(self.__unpackVertex__(file))
+			elif format == 6:
+				shortVerts = True
 
-			# 			file.seek(vStride - 3 * 4, 1)
+				if vStride == 26:
+					for i in SafeRange(self, vCnt):
+						file.seek(4, 1)
+
+						UVs.append(self.__unpackShortUV__(file))
+
+						file.seek(8, 1)
+
+						verts.append(self.__unpackShortVertex__(file))
+
+						file.seek(6, 1)
+				elif vStride == 28:
+					for i in SafeRange(self, vCnt):
+						file.seek(12, 1)
+
+						verts.append(self.__unpackShortVertex__(file))
+
+						file.seek(6, 1)
+
+						UVs.append(self.__unpackShortUV__(file))
 			# 	else:
 			# 		log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
 				

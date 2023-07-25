@@ -157,7 +157,7 @@ struct Lod {
 	
 	RigidObject rigids[rigidCnt];
 	
-	padding[modelData.occ[lodId].shaderMeshOfs - (HdrSz + sizeof(rigids))];
+	padding[modelData.occ[lodId].shaderMeshOfs - (0x20 + sizeof(rigids))];
 	lodId = lodId + 1;
 	
 	ShaderMesh mesh[rigidCnt];

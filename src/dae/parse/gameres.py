@@ -95,7 +95,7 @@ class GameResDesc(FilePathable, Terminable):
 		except:
 			return False
 
-	def getModelMaterials(self, model:str) -> list[str]:
+	def getModelMaterials(self, model:str) -> list[MaterialData]:
 		tex = self.getModelTextures(model)
 
 		if tex is None:

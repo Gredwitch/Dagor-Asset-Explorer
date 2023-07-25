@@ -1,6 +1,18 @@
 from io import BufferedReader
+from io import BytesIO
+from struct import pack
 # from terminable import Terminable
 
+class BBytesIO(BytesIO):
+	def writeInt(self, num:int):
+		self.write(pack("I", num))
+
+	def writeString(self, string:str):
+		if string == None:
+			self.writeInt(0)
+		else:
+			self.write(pack("I", len(string)))
+			self.write(string.encode())
 
 class BinFile(BufferedReader):
 	def __init__(self, data:bytes):

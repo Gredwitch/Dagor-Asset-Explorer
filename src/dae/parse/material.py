@@ -1,4 +1,5 @@
 
+from io import BytesIO
 import sys
 from os import path, getcwd, mkdir
 
@@ -12,7 +13,7 @@ from util.decompression import zstdDecompress, oodleDecompress, zlibDecompress, 
 from parse.mesh import MatVData
 from util.enums import *
 from util.assetcacher import AssetCacher
-
+from pprint import pprint
 from struct import pack_into as packInto
 from struct import pack
 from ctypes import create_string_buffer
@@ -33,8 +34,8 @@ class DDSx(Packed):
 			self.d3dformat = file.read(4)
 			self.flags = readEx(3, file)
 			self.cMethod = readByte(file)
-			self.w = readShort(file)
 			self.h = readShort(file)
+			self.w = readShort(file)
 
 			self.levels = readByte(file)
 			self.hqPartLevels = readByte(file)
@@ -435,144 +436,260 @@ class DDSxTexturePack2(Pack): # TODO: Add logs
 	def getPackedFiles(self) -> list[DDSx, False]:
 		return self.__files
 
+def ftm(tex:str): # format texture to material
+	tex = tex.split("*")[0]
+	splitted = tex.split("_")
+	
+	noTex = True
+
+	for i in range(len(splitted) - 1, 0, -1):
+		part = splitted[i]
+
+		if part == "tex":
+			if i + 1 < len(splitted) and len(splitted[i + 1]) <= 2:
+				splitted.pop(i + 1)
+			
+			splitted.pop(i)
+			noTex = False
+
+			break
+	
+	if noTex and len(splitted[-1]) < 2:
+		splitted.pop()
+	
+	return "_".join(splitted)
+
+def addComp(list:list[str], comp:str):
+	if comp is not None:
+		list.append(ftm(comp))
+
+def getBestTex(self:Terminable, ddsx:list[DDSx]):
+	best = ddsx[0]
+	
+	for i in SafeRange(self, 1, len(ddsx)):
+		cur = ddsx[i]
+
+		if cur.getPixelCnt() > best.getPixelCnt():
+			best = cur
+
+	return best
+
 class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
+	def __repr__(self):
+		return f"<MaterialData {self.getName()}>"
+	
 	def __init__(self):
-		self.diffuse = None
-		self.mask = None
-		self.normal = None
-		self.ambientOcclusion = None
-
-		self.two_sided = False
-
-		self.detail = []
-		self.detailNormal = []
-
-		self.name = None
+		self.__name:str = None
+		self.__params:dict[str, str] = None
 
 		self.diff = (0, 0, 0, 1)
 		self.amb = (0, 0, 0, 1)
 		self.emis = (0, 0, 0, 1)
 		self.spec = (0, 0, 0, 1)
 
-		self.cls = None
-		self.par = None
+		self.cls:str = None
+		self.par:str = None
 
-		self.properties = {}
+
+		self.__detailList = None
+		self.__textureSlots:list[str] = [None for _ in range(11)]
+		self.textures:list[str] = []
 	
-	def __ftm(self, tex:str): # format texture to material
-		tex = tex.split("*")[0]
-		splitted = tex.split("_")
-
-		if len(splitted[-1]) > 2:
-			return tex
-		else:
-			return "_".join(splitted[:-1])
+	def isLayered(self):
+		return self.cls.find("layered") != -1
 	
-	def __mn(self, *args): # make name
-		return "_".join(args)
-
+	def isDynamic(self):
+		return self.cls.find("dynamic") != -1
+	
 	def __generateName__(self):
-		formattedDetail = None
-
-		if len(self.detail) > 0:
-			formattedDetail = []
-
-			for tex in SafeIter(self, self.detail):
-				f = self.__ftm(tex)
-
-				if f in formattedDetail or f == self.diffuse:
-					continue
-				
-			formattedDetail.append(f)
+		if len(self.textures) == 0:
+			return self.cls
 		
-		if len(self.detail) < len(self.detailNormal):
-			if formattedDetail is None:
-				formattedDetail = []
+		components:list[str] = []
 
-			for tex in SafeIter(self.detailNormal):
-				f = self.__ftm(tex)
-
-				if f in formattedDetail or f == self.diffuse:
-					continue
-				
-				formattedDetail.append(f)
-
-		if self.diffuse is None:
-			if self.mask is None:
-				if formattedDetail is None:
-					return self.cls
-				else:
-					return self.__mn(self.cls, *formattedDetail)
-			else:
-				if formattedDetail is None:
-					return self.cls + "_" + self.__ftm(self.mask)
-				else:
-					return self.__mn(self.cls, self.__ftm(self.mask), *formattedDetail)
-
+		# shader class families:
+		# dynamic (not layered): diffuse, mask, normal, AO, eventually detail - if mask, invert diffuse's alpha
+		# layered: diffuse, mask, normal, detail - should we invert the diffuse's alpha?
+		# simple / other: diffuse, (none), normal 
+		# rendinst_simple_layered: AABB structure (A = diffuse, B = normal) - should we do a 50% mix?
+		# rendinst_tree_colored: uses alpha as mask
+		# rendinst_interior_mapping: uses cubemap as diffuse and normal
+		# combined: weird mask? (dynamic_combined_mixed_decal, dynamic_combined_detailed_decal)
 		
-		if self.mask is None or self.mask == self.diffuse:
-			if formattedDetail is None:
-				return self.__ftm(self.diffuse)
-			else:
-				return self.__mn(self.diffuse, *formattedDetail)
-		else:
-			if formattedDetail is None:
-				return self.__mn(self.__ftm(self.diffuse), self.__ftm(self.mask))
-			else:
-				return self.__mn(self.__ftm(self.diffuse), self.__ftm(self.mask), *formattedDetail)
+		if not self.isLayered():
+			addComp(components, self.__textureSlots[0])
+			addComp(components, self.__textureSlots[1])
 
-	def getTexFileName(self, tex:str):
+		detailStart = 4
+
+		if not self.isDynamic() or self.isLayered():
+			detailStart = 3
+		
+		for i in range(detailStart, len(self.__textureSlots), 2):
+			detail = self.__textureSlots[i]
+
+			addComp(components, detail)
+
+			if detail is None and i + 1 < len(self.__textureSlots):
+				addComp(components, self.__textureSlots[i + 1])
+
+
+		return "_".join(components)
+
+	@classmethod
+	def getTexFileName(cls, tex:str):
 		return tex.split("*")[0]
 	
 
 	def addTexSlot(self, slotName:str, tex:str):
-		if slotName == "t0":
-			self.diffuse = tex
-		elif slotName == "t1":
-			self.mask = tex
-		elif slotName == "t2":
-			self.normal = tex
-		elif tex[-4:] == "_ao*":
-			self.ambientOcclusion = tex
-		elif tex[-3] == "_n*":
-			self.detailNormal.append(tex)
-		else:
-			self.detail.append(tex)
+		slotIdx = int(slotName[1:])
+
+		self.__textureSlots[slotIdx] = tex
+		self.textures.append(tex)
 	
 	def getName(self):
-		if self.name is None:
-			self.name = self.__generateName__()
+		if self.__name is None:
+			self.__name = self.__generateName__()
 		
-		return self.name
+		return self.__name
 	
 	def setName(self, name:str):
-		self.name = name
+		self.__name = name
 	
-	def __repr__(self):
-		return f"<MaterialData {self.getName()}>"
 	
 	def getParams(self):
-		params = {}
+		if self.__params is None:
+			params = {}
+			
+			paramL = self.par.split("\n")
+
+			for param in SafeIter(self, paramL):
+				splitParam = param.split("=")
+
+				if len(splitParam) == 1:
+					key = splitParam[0]
+					val = ""
+				else:
+					key, val = splitParam
+
+				params[key] = val
+
+			self.__params = params
+
+		return self.__params
+
+
+	def exportTexture(self, texture:str, output:str = getcwd()):
+		outpath = path.join(output, "textures")
+
+		if not path.exists(outpath):
+			mkdir(outpath)
+			
 		
-		splitted = self.par.split("=")
+		name = texture.split("*")[0]
 
-		for i in SafeRange(self, 0, len(splitted) - 1, 2):
-			params[splitted[i]] = splitted[i + 1]
+		ddsx:list[DDSx] = AssetCacher.getCachedAsset(DDSx, name)
 
-		return params
+		if not ddsx:
+			log.log(f"{name} not found")
+			
+			return
+		
+		data = getBestTex(self, ddsx).getDDS()
+
+		output = path.join(outpath, f"{name}.dds")
+
+		file = open(output, "wb")
+
+		file.write(data)
+
+		file.close()
+
+		log.log(f"Wrote {len(data)} bytes to {output}")
+	
+	def getDMF(self):
+		buffer = BBytesIO()
+
+		name = self.getName()
+		
+		buffer.writeString(name)
+		buffer.writeString(self.cls)
+		
+		buffer.write(pack("ffff", *self.diff))
+		buffer.write(pack("ffff", *self.amb))
+		buffer.write(pack("ffff", *self.emis))
+		buffer.write(pack("ffff", *self.spec))
+
+		for tex in SafeIter(self, self.__textureSlots):
+			buffer.writeString(tex)
+		
+		params = self.getParams()
+
+		buffer.writeInt(len(params))
+
+		for k in params:
+			buffer.writeString(k)
+			buffer.writeString(params[k])
+
+		value = buffer.getvalue()
+
+		buffer.close()
+
+		return value
 
 	def __eq__(self, other):
-		return (self.diffuse == other.diffuse and
-				self.normal == other.normal and 
-				self.ambientOcclusion == other.ambientOcclusion and (
-					(self.mask == other.mask) or 
-					(self.mask == self.diffuse and other.mask is None) or 
-					(other.mask == other.diffuse and self.mask is None)) and
-				self.detail == other.detail and 
-				self.detailNormal == other.detailNormal and
-				# self.cls == other.cls and
-				# self.par == other.par and
-				self.properties == other.properties)
+		return self.__textureSlots == other.__textureSlots # and self.par == other.par
+
+	def detail1IsDiffuse(self):
+		return self.isLayered() and self.cls != "rendinst_simple_layered"
+
+	@property
+	def diffuse(self):
+		if self.detail1IsDiffuse():
+			self.__initDetailList__()
+
+			if len(self.__detailList) >= 1:
+				return self.__detailList[0]
+			else:
+				return None
+		else:
+			return self.__textureSlots[0]
+	
+	@property
+	def normal(self):
+		return self.__textureSlots[2]
+	
+	@property
+	def mask(self):
+		return self.__textureSlots[1]
+	
+	def __initDetailList__(self):
+		if self.__detailList is None:
+			detailList = []
+			detailStart = 4
+
+			if not self.isDynamic() or self.isLayered():
+				detailStart = 3
+			
+			for i in range(detailStart, len(self.__textureSlots), 2):
+				tex = self.__textureSlots[i]
+
+				if tex is not None:
+					detailList.append(tex)
+			
+			self.__detailList = detailList
+
+	@property 
+	def detail(self):
+		self.__initDetailList__()
+
+		if self.detail1IsDiffuse():
+			return self.__detailList[1:]
+		else:
+			return self.__detailList
+
+
+
 
 class MaterialTemplateLibrary(Terminable):
 	class Material(Terminable):
@@ -584,7 +701,7 @@ class MaterialTemplateLibrary(Terminable):
 
 			self.params = {}
 
-			f = lambda x: f"{x[0]} {x[1]} {x[2]} {x[3]}"
+			# f = lambda x: f"{x[0]} {x[1]} {x[2]} {x[3]}"
 
 			# self.setParam("Ka", f(material.amb))
 			# self.setParam("Kd", f(material.diff))
@@ -623,64 +740,13 @@ class MaterialTemplateLibrary(Terminable):
 
 			return formatted
 
-		def __saveTexture__(self, data:bytes, output:str):
-			file = open(output, "wb")
-
-			file.write(data)
-
-			file.close()
-
-			log.log(f"Wrote {len(data)} bytes to {output}")
-		
-		def getBestTex(self, ddsx:list[DDSx]):
-			best = ddsx[0]
-			
-			for i in SafeRange(self, 1, len(ddsx)):
-				cur = ddsx[i]
-
-				if cur.getPixelCnt() > best.getPixelCnt():
-					best = cur
-
-			return best
-		
 		def __exportDiffuse__(self, outpath:str):
-			name = self.material.diffuse.split("*")[0]
-
-			ddsx:list[DDSx] = AssetCacher.getCachedAsset(DDSx, name)
-
-			if not ddsx:
-				log.log(f"{name} not found")
-				
-				return
-			
-			output = self.params["map_Kd"]
-
-			# log.log(f"Exporting diffuse to {output}")
-			
-			data = self.getBestTex(ddsx).getDDS()
-
-			self.__saveTexture__(data, outpath + "/" + output)
+			self.material.exportTexture(self.material.diffuse, outpath)
 		
 		def __exportNormal__(self, outpath:str):
-			name = self.material.normal.split("*")[0]
-
-			ddsx:list[DDSx] = AssetCacher.getCachedAsset(DDSx, name)
-
-			if not ddsx:
-				return
-			
-			output = self.params["map_bump"]
-
-			# log.log(f"Exporting bumpmap to {output}")
-			
-			data = self.getBestTex(ddsx).getDDS()
-
-			self.__saveTexture__(data, outpath + "/" + output)
+			self.material.exportTexture(self.material.normal, outpath)
 
 		def exportTextures(self, outpath:str = getcwd()):
-			if not path.exists(f"{outpath}/textures"):
-				mkdir(f"{outpath}/textures")
-			
 			if "map_Kd" in self.params:
 				self.__exportDiffuse__(outpath)
 			
@@ -704,6 +770,8 @@ class MaterialTemplateLibrary(Terminable):
 		log.addLevel()
 
 		for mat in SafeIter(self, self.__mats):
+			mat:MaterialTemplateLibrary.Material
+
 			log.log(f"Exporting textures from {mat.material.getName()}")
 			log.addLevel()
 
@@ -721,12 +789,16 @@ def computeMaterialNames(mats:list[MaterialData], parent:Terminable = None):
 	iterIt = (lambda x: SafeIter(parent, x)) if parent is not None else (lambda x: iter(x))
 	
 	for k, mat in enumerateIt(mats):
+		mat:MaterialData
+
 		log.log(f"Materials #{k}: {mat.getName()}")
 
 		cnt = 1
 
 
 		for mat2 in iterIt(mats):
+			mat2:MaterialData
+			
 			if mat is mat2:
 				continue
 			

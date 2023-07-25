@@ -14,12 +14,13 @@ from abc import abstractmethod
 from pyperclip import copy as copyToClipboard
 from functools import partial
 from parse.material import DDSx, DDSxTexturePack2
-from parse.realres import RendInst, DynModel
+from parse.realres import RendInst, ModelContainer, GeomNodeTree
 from parse.gameres import GameResourcePack
 from traceback import format_exc
 from gui.progressDialog import MessageBox
 from util.settings import SETTINGS
-from gui.previewDialog import PreviewDialog
+from subprocess import Popen
+# from gui.previewDialog import PreviewDialog
 
 
 FOLDER_ICO_PATH = getResPath("folder.bmp")
@@ -72,42 +73,48 @@ class SimpleItem:
 
 			if isinstance(asset, DDSx):
 				menu.addAction(ExportToDDS(menu, self))
-			elif isinstance(asset, RendInst):
+			elif isinstance(asset, ModelContainer):
 				level = log.curLevel
 
 				try:
 					# menu.addAction(PreviewModel(menu, self, 0))
-					menu.addAction(ExportToOBJ(menu, self, 0))
 
-					# if isinstance(asset, DynModel):
-					# 	menu.addSeparator()
-					# 	menu.addAction("WARNING: DynModel support is experimental")
-					# 	menu.addSeparator()
+					menu.addAction(ExportToDMF(menu, self, 0))
 
-					asset.computeData()
+					if isinstance(asset, RendInst):
+						menu.addAction(ExportToSource(menu, self, 0))
+						menu.addAction(ExportToOBJ(menu, self, 0))
 
+						asset.computeData()
 
-					submenu = menu.addMenu("Export LOD...")
+						if asset.lodCount > 1:
+							submenu = menu.addMenu("Export LOD...")
 
-					for i in range(asset.lodCount):
-						submenu.addAction(ExportToOBJ(menu, self, i))
+							for i in range(asset.lodCount):
+								submenu.addAction(ExportToDMF(menu, self, i))
 
-					submenu.addSeparator()
+							submenu.addSeparator()
+							
+							for i in range(asset.lodCount):
+								submenu.addAction(ExportToOBJ(menu, self, i))
 
-					submenu.addAction(ExportLODsToOBJ(menu, self))
+							submenu.addSeparator()
+
+							submenu.addAction(ExportLODsToDMF(menu, self))
+							submenu.addAction(ExportLODsToOBJ(menu, self))
 				except Exception as e:
 					print(format_exc())
 
 					log.subLevel(log.curLevel - level)
 
 					MessageBox("Failed to compute preliminary data. Check the console for details.").exec_()
-
 			elif isinstance(asset, Pack):
 				menu.addAction(ExtractAll(menu, self))
 
 				if isinstance(asset, DDSxTexturePack2):
 					menu.addAction(ExportAllToDDS(menu, self))
 				elif isinstance(asset, GameResourcePack):
+					menu.addAction(ExportAllToDMF(menu, self))
 					menu.addAction(ExportAllToOBJ(menu, self))
 					# menu.addAction(ExportAllLODsToOBJ(menu, self))
 			
@@ -216,8 +223,14 @@ class ThreadedAction(CustomAction):
 	def setTerminable(self, ter:Terminable):
 		self.item.mainWindow.setTerminable(ter)
 	
+	def setSubProcess(self, proc):
+		self.item.mainWindow.setSubProcess(proc)
+	
 	def clearTerminable(self):
 		self.item.mainWindow.clearTerminable()
+	
+	def clearSubProcess(self):
+		self.item.mainWindow.clearSubProcess()
 	
 	def handleTermination(self, ter:Terminable):
 		if self.shouldTerminate:
@@ -473,35 +486,6 @@ class ExportAllToDDS(SaveAction):
 		
 		self.clearTerminable()
 
-
-class ExportToOBJ(SaveAction):
-	def __init__(self, parent, item: SimpleItem, lod:int):
-		self.lod = lod
-
-		super().__init__(parent, item)
-	
-	item:AssetItem
-
-	@property
-	def actionText(self) -> str:
-		return f"Export LOD {self.lod} to OBJ"
-	
-	@property
-	def taskTitle(self) -> str:
-		return f"Exporting LOD to {self.item.asset.getExportName(self.lod)}.obj"
-
-	def save(self, output:str):
-		asset:RendInst = self.item.asset
-		self.setTerminable(asset)
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-		
-		asset.exportObj(self.lod, output, exportTex)
-
-		self.clearTerminable()
-		
-
-		self.setTaskProgress(1)
-
 class PreviewModel(CustomAction):
 	def __init__(self, parent, item: SimpleItem, lod:int):
 		self.lod = lod
@@ -530,10 +514,208 @@ class PreviewModel(CustomAction):
 	def run(self):
 		asset:RendInst = self.item.asset
 
-		PreviewDialog(self.mainWindow, asset.getObj(self.lod)).show()
+		# PreviewDialog(self.mainWindow, asset.getObj(self.lod)).show()
 
+
+ 
+class ExportToDMF(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
+	def __init__(self, parent, item: SimpleItem, lod:int):
+		self.lod = lod
+
+		super().__init__(parent, item)
+	
+	item:AssetItem
+
+	@property
+	def actionText(self) -> str:
+		return f"Export LOD {self.lod} to DMF"
+	
+	@property
+	def taskTitle(self) -> str:
+		if isinstance(self.item.asset, GeomNodeTree):
+			return f"Exporting skeleton to {self.item.asset.name}.dmf"
+		else:
+			return f"Exporting LOD to {self.item.asset.getExportName(self.lod)}.dmf"
+
+	def save(self, output:str):
+		asset:RendInst = self.item.asset
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
 		
+		self.setTerminable(asset)
+		mdl = asset.getModel(self.lod)
+		self.setTerminable(mdl)
+		mdl.exportDmf(output, exportTex)
+		self.clearTerminable()
 		
+
+		self.setTaskProgress(1)
+ 
+class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
+	def __init__(self, parent, item: SimpleItem, lod:int):
+		self.lod = lod
+
+		super().__init__(parent, item)
+	
+	item:AssetItem
+
+	@property
+	def actionText(self) -> str:
+		return f"Export LOD {self.lod} to Source engine"
+	
+	@property
+	def taskTitle(self) -> str:
+		return f"Exporting LOD {self.lod} to {self.item.asset.name}.mdl"
+
+	def save(self, output:str):
+		asset:RendInst = self.item.asset
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		
+		self.setTaskStatus("Generating model data")
+		self.setTerminable(asset)
+		mdl = asset.getSourceModel(self.lod)
+		self.setTaskProgress(0.33)
+		self.setTerminable(mdl)
+		self.setTaskStatus("Exporting model data to QC, SMD and VMT")
+		qc = mdl.export(output)
+		self.setTaskProgress(0.66)
+		self.clearTerminable()
+		
+
+		self.setTaskStatus("Compiling")
+		process = Popen([
+			SETTINGS.getValue(SETTINGS_STUDIOMDL_PATH), 
+			"-nop4", 
+			"-verbose", 
+			"-game", 
+			path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH)), qc])
+		self.setSubProcess(process)
+		process.wait()
+
+		self.setTaskProgress(1)
+
+
+		self.setTaskProgress(1)
+
+class ExportLODsToDMF(SaveAction):
+	item:AssetItem
+
+	@property
+	def actionText(self) -> str:
+		return "Export all LODs to DMF"
+	
+	@property
+	def taskTitle(self) -> str:
+		return f"Exporting all LODs from {self.item.asset.name} to DMF"
+
+	def save(self, output:str):
+		asset:RendInst = self.item.asset
+		self.setTerminable(asset)
+		asset.computeData()
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+
+		for i in range(asset.lodCount):
+			if self.handleTermination(asset):
+				break
+			
+			self.setTerminable(asset)
+			mdl = asset.getModel(i)
+			self.setTerminable(mdl)
+			mdl.exportDmf(output, exportTex)
+
+
+			self.setTaskProgress((i + 1) / asset.lodCount)
+		
+		self.clearTerminable()
+
+class ExportAllToDMF(SaveAction):
+	item:AssetItem
+
+	@property
+	def actionText(self) -> str:
+		return "Export all models to LOD 0 DMF"
+	
+	@property
+	def taskTitle(self) -> str:
+		return f"Exporting LOD 0 models from {self.item.asset.name}.{self.item.asset.fileExtension} to DMF"
+	
+	def save(self, output:str):
+		asset:GameResourcePack = self.item.asset
+		output = self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXPORT_FOLDER), asset.name)
+		self.setTerminable(asset)
+
+		packedFiles = asset.getPackedFiles()
+		fileCnt = 0
+
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+
+		for v in packedFiles:
+			if isinstance(v, RendInst):
+				fileCnt += 1
+
+		k = 0
+
+		for v in packedFiles:
+			if isinstance(v, RendInst):
+				if self.handleTermination(v):
+					break
+				k += 1
+
+				self.setTaskStatus(f"Exporting {v.getExportName(0)}.dmf... ({k}/{fileCnt})")
+
+				level = log.curLevel
+
+				log.log(f"Exporting {v.getExportName(0)}.dmf... ({k}/{fileCnt})")
+				log.addLevel()
+				
+
+				try:
+					self.setTerminable(v)
+					mdl = v.getModel(0)
+					self.setTerminable(mdl)
+					mdl.exportDmf(output, exportTex)
+
+					log.subLevel()
+				except Exception as e:
+					print(format_exc())
+
+					self.setErrored()
+
+					log.subLevel(log.curLevel - level)
+
+				self.setTaskProgress(k / fileCnt)
+		
+		self.clearTerminable()
+
+
+class ExportToOBJ(SaveAction):
+	def __init__(self, parent, item: SimpleItem, lod:int):
+		self.lod = lod
+
+		super().__init__(parent, item)
+	
+	item:AssetItem
+
+	@property
+	def actionText(self) -> str:
+		return f"Export LOD {self.lod} to OBJ"
+	
+	@property
+	def taskTitle(self) -> str:
+		return f"Exporting LOD to {self.item.asset.getExportName(self.lod)}.obj"
+
+	def save(self, output:str):
+		asset:RendInst = self.item.asset
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+	
+		self.setTerminable(asset)
+		mdl = asset.getModel(self.lod)
+		self.setTerminable(mdl)
+		mdl.exportObj(output, exportTex)
+
+		self.clearTerminable()
+		
+
+		self.setTaskProgress(1)
 
 class ExportLODsToOBJ(SaveAction):
 	item:AssetItem
@@ -555,8 +737,12 @@ class ExportLODsToOBJ(SaveAction):
 		for i in range(asset.lodCount):
 			if self.handleTermination(asset):
 				break
+			
+			self.setTerminable(asset)
+			mdl = asset.getModel(i)
+			self.setTerminable(mdl)
+			mdl.exportObj(output, exportTex)
 
-			asset.exportObj(i, output, exportTex)
 
 			self.setTaskProgress((i + 1) / asset.lodCount)
 		
@@ -604,7 +790,10 @@ class ExportAllToOBJ(SaveAction):
 				
 
 				try:
-					v.exportObj(0, output, exportTex)
+					self.setTerminable(v)
+					mdl = v.getModel(0)
+					self.setTerminable(mdl)
+					mdl.exportObj(output, exportTex)
 
 					log.subLevel()
 				except Exception as e:
@@ -695,6 +884,12 @@ class CustomTreeView(QTreeView):
 		paths = self.getEventPaths(event.mimeData())
 
 		if paths is not None:
+			for i in range(1, len(paths)):
+				path = paths[i]
+
+				if path.startswith("file:///"):
+					paths[i] = path[8:]
+			
 			self.mainWindow.mountAssets(paths)
 	
 	def getEventPaths(self, data:QMimeData):
