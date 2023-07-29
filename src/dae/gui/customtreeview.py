@@ -1,5 +1,5 @@
 import sys
-from os import path, system, mkdir
+from os import path, system, mkdir, makedirs, replace, listdir, rmdir
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
@@ -7,7 +7,7 @@ import util.log as log
 from PyQt5.QtWidgets import QAbstractItemView, QTreeView, QLineEdit, QHeaderView, QMenu, QAction, QStyledItemDelegate, QFileDialog, QMainWindow
 from PyQt5.QtCore import pyqtSignal, QMimeData, Qt, QSortFilterProxyModel, QPoint, QFileInfo
 from PyQt5.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QStandardItemModel, QStandardItem, QIcon
-from util.misc import formatBytes, getResPath, openFile, ROOT_FOLDER
+from util.misc import formatBytes, getResPath, openFile, ROOT_FOLDER, LIB_FOLDER
 from util.terminable import Exportable, Packed, Pack, Terminable
 from util.enums import *
 from abc import abstractmethod
@@ -20,10 +20,15 @@ from traceback import format_exc
 from gui.progressDialog import MessageBox
 from util.settings import SETTINGS
 from subprocess import Popen
+from glob import glob
+from PIL import Image
+from PIL.ImageChops import invert
+import shutil
 # from gui.previewDialog import PreviewDialog
 
 
 FOLDER_ICO_PATH = getResPath("folder.bmp")
+VTFCMD_PATH = path.join(LIB_FOLDER, "VTFcmd.exe")
 
 class SafeStandardItem(QStandardItem):
 	def __init__(self, *args, **kwargs):
@@ -567,34 +572,139 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 		return f"Exporting LOD {self.lod} to {self.item.asset.name}.mdl"
 
 	def save(self, output:str):
+		modelPath = "dae_out"
 		asset:RendInst = self.item.asset
 		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		exportToGame = SETTINGS.getValue(SETTINGS_EXPORT_GAMEINFO)
+		exportCollisionModel = SETTINGS.getValue(SETTINGS_STUDIOMDL_EXPORT_COLLISION)
+		exportSMDs = SETTINGS.getValue(SETTINGS_EXPORT_SMD)
+		dontCompile = SETTINGS.getValue(SETTINGS_NO_MDL)
+		dontReplaceTex = SETTINGS.getValue(SETTINGS_DONT_EXPORT_EXISTING_TEXTURES)
+
+		if exportTex:
+			stepCnt = 5
+		else:
+			stepCnt = 3
 		
 		self.setTaskStatus("Generating model data")
 		self.setTerminable(asset)
-		mdl = asset.getSourceModel(self.lod)
-		self.setTaskProgress(0.33)
-		self.setTerminable(mdl)
+		smdl = asset.getSourceModel(self.lod)
+		self.setTaskProgress(1/stepCnt)
+		self.setTerminable(smdl)
 		self.setTaskStatus("Exporting model data to QC, SMD and VMT")
-		qc = mdl.export(output)
-		self.setTaskProgress(0.66)
+		qc, texturePaths = smdl.export(output, modelPath, exportCollisionModel, exportSMDs)
+		self.setTaskProgress(2/stepCnt)
 		self.clearTerminable()
 		
+		
+		gamePath = path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH))
 
-		self.setTaskStatus("Compiling")
-		process = Popen([
-			SETTINGS.getValue(SETTINGS_STUDIOMDL_PATH), 
-			"-nop4", 
-			"-verbose", 
-			"-game", 
-			path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH)), qc])
-		self.setSubProcess(process)
-		process.wait()
+		output = path.join(output, smdl.name)
+		sourceExport = path.join(output, "source_export")
 
-		self.setTaskProgress(1)
+		makedirs(sourceExport, exist_ok = True)
+
+		if exportSMDs and not dontCompile:
+			self.setTaskStatus("Compiling")
+
+			pipes = Popen([
+				SETTINGS.getValue(SETTINGS_STUDIOMDL_PATH), 
+				"-nop4", 
+				"-verbose", 
+				"-game", 
+				path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH)), 
+				qc])
+			
+			self.setSubProcess(pipes)
+
+			if pipes.wait() != 0:
+				raise Exception(f"Compile failed: return code {pipes.returncode}")
+			
+			self.clearSubProcess()
+
+			if not exportToGame:
+				modelOutPath = path.join(sourceExport, f"models/{modelPath}")
+
+				makedirs(modelOutPath, exist_ok = True)
+				
+				files = glob(path.join(gamePath, f"models/{modelPath}/{asset.name}.*"))
+
+				for f in files:
+					log.log(f"Moving {f} to {modelOutPath}")
+					replace(f, path.join(modelOutPath, path.basename(f)))
+			
+		self.setTaskProgress(3/stepCnt)
+
+		if exportTex and texturePaths is not None:
+			self.setTaskStatus("Exporting textures")
+			log.addLevel()
+			mdl = smdl.model
+			self.setTerminable(mdl)
+			mdl.exportTextures(output)
+			self.clearTerminable()
+			log.subLevel()
+
+			self.setTaskProgress(4/stepCnt)
+			self.setTaskStatus("Converting textures to VTF")
+			log.addLevel()
+
+			materialsPath = path.join(sourceExport, "materials")
+
+			texDict = texturePaths.getDict()
+			for k, texName in enumerate(texDict.keys()):
+				tex = texturePaths.get(texName)
+
+				texOutPath = path.normpath(path.join(materialsPath, tex.texPath))
+
+				if dontReplaceTex and path.exists(path.join(texOutPath, f"{texName}.vtf")):
+					log.log(f"Skipping already exported texture {texName}")
+
+					continue
+
+				makedirs(texOutPath, exist_ok = True)
+
+				texFile = path.join(output, f"textures/{texName}.dds")
 
 
-		self.setTaskProgress(1)
+				if tex.texType == TEXTURE_MASKED:
+					img = Image.open(texFile)
+					r, g, b, a = img.split()
+					img.close()
+					newImg = Image.merge("RGBA", (r, g, b, invert(a)))
+					newImg.save(texFile)
+				elif tex.texType == TEXTURE_NORMAL:
+					img = Image.open(texFile)
+					r, g, b, a = img.split()
+					img.close()
+					whiteChannel = Image.new("L", img.size, 255)
+					newImg = Image.merge("RGBA", (a, g, whiteChannel, r))
+					newImg.save(texFile)
+
+				pipes = Popen((
+					VTFCMD_PATH,
+					"-file",
+					path.normpath(texFile),
+					"-output",
+					texOutPath
+				))
+
+				pipes.wait()
+
+				self.setTaskProgress((4 + (k + 1) / len(texDict))/stepCnt)
+
+			if exportToGame and path.exists(materialsPath):
+				log.log("Moving materials directory...")
+
+				shutil.copytree(materialsPath, path.join(gamePath, "materials"), dirs_exist_ok = True)
+				shutil.rmtree(materialsPath)
+			
+
+			if len(listdir(sourceExport)) == 0:
+				rmdir(sourceExport)
+
+			log.subLevel()
+			self.setTaskProgress(5/stepCnt)
+
 
 class ExportLODsToDMF(SaveAction):
 	item:AssetItem

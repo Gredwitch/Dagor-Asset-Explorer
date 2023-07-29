@@ -293,7 +293,9 @@ class MapExportDialog(QDialog):
 			try:
 				log.log(f"Exporting {ent}")
 				log.addLevel()
-				asset.exportDmf(0, outpath, not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT))
+				asset.computeData()
+				mdl = asset.getModel(0)
+				mdl.exportDmf(outpath, not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT))
 				log.subLevel()
 			except:
 				print(format_exc())

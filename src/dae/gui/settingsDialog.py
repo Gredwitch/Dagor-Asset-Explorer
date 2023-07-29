@@ -21,11 +21,19 @@ class SettingsDialog(QDialog):
 	extractFolder:QCheckBox
 	noTexExport:QCheckBox
 	outputFolder:QCheckBox
+	exportSourceCollision:QCheckBox
+	exportGameInfo:QCheckBox
+	exportSMD:QCheckBox
+	noMDL:QCheckBox
+	dontExportExistingTextures:QCheckBox
 
 	studiomdlLine:QLineEdit
 	studioMdlBtn:QPushButton
 	gameInfoLine:QLineEdit
 	gameInfoBtn:QPushButton
+
+	exportGameInfoLayout:QVBoxLayout
+	exportSMDLayout:QVBoxLayout
 
 	
 	def __init__(self, parent:QWidget):
@@ -40,6 +48,12 @@ class SettingsDialog(QDialog):
 		self.setupCheckBox(self.extractFolder, SETTINGS_EXTRACT_FOLDER)
 		self.setupCheckBox(self.noTexExport, SETTINGS_NO_TEX_EXPORT)
 		self.setupCheckBox(self.outputFolder, SETTINGS_OUTPUT_FOLDER)
+		self.setupCheckBox(self.exportSourceCollision, SETTINGS_STUDIOMDL_EXPORT_COLLISION)
+		self.setupCheckBox(self.exportGameInfo, SETTINGS_EXPORT_GAMEINFO, self.exportGameInfoLayout)
+		self.setupCheckBox(self.exportSMD, SETTINGS_EXPORT_SMD, self.exportSMDLayout)
+		self.setupCheckBox(self.noMDL, SETTINGS_NO_MDL)
+		self.setupCheckBox(self.dontExportExistingTextures, SETTINGS_DONT_EXPORT_EXISTING_TEXTURES)
+
 
 		self.studiomdlLine.setText(SETTINGS.getValue(SETTINGS_STUDIOMDL_PATH))
 		self.studioMdlBtn.clicked.connect(lambda: self.selectFile("Select StudioMDL binary", ["studiomdl.exe"], SETTINGS_STUDIOMDL_PATH, self.studiomdlLine))
@@ -59,9 +73,27 @@ class SettingsDialog(QDialog):
 		SETTINGS.setValue(settingKey, path)
 		SETTINGS.saveSettings()
 
-	def setupCheckBox(self, cBox:QCheckBox, setting:str):
-		cBox.setChecked(SETTINGS.getValue(setting))
-		cBox.stateChanged.connect(lambda: self.toggleSetting(setting))
+	def setupCheckBox(self, cBox:QCheckBox, setting:str, layout:QVBoxLayout = None):
+		val = SETTINGS.getValue(setting)
+		cBox.setChecked(val)
+		cBox.stateChanged.connect(lambda: self.toggleSetting(setting, layout))
 
-	def toggleSetting(self, setting:str):
-		SETTINGS.setValue(setting, not SETTINGS.getValue(setting))
+		if layout is not None:
+			self.handleLayout(layout, not val)
+
+	def handleLayout(self, layout:QVBoxLayout, enable:bool):
+		for i in range(layout.count()):
+			child = layout.itemAt(i).widget()
+
+			if not isinstance(child, QCheckBox):
+				continue
+
+			child.setDisabled(enable)
+
+	def toggleSetting(self, setting:str, layout:QVBoxLayout = None):
+		newVal = not SETTINGS.getValue(setting)
+
+		SETTINGS.setValue(setting, newVal)
+
+		if layout is not None:
+			self.handleLayout(layout, not newVal)

@@ -18,7 +18,7 @@ from util.misc import openFile, getResPath, getUIPath
 from util.assetmanager import AssetManager
 from util.settings import SETTINGS
 from parse.gameres import GameResDesc
-from parse.realres import GeomNodeTree, DynModel, RendInst
+from parse.realres import GeomNodeTree, DynModel, RendInst, CollisionGeom
 from parse.material import DDSx
 from parse.dbld import DagorBinaryLevelData
 from util.assetcacher import AssetCacher
@@ -36,6 +36,7 @@ SOUND_ICO_PATH = getResPath("asset_sound.bmp")
 SHOULD_CACHE:tuple[type[Exportable]] = (
 	DDSx,
 	GeomNodeTree,
+	CollisionGeom,
 	DynModel, # for maps
 	RendInst # for maps
 )
@@ -210,7 +211,7 @@ class MainWindow(QMainWindow):
 	def setTaskTitle(self, title:str):
 		self.taskTitle.emit(title)
 
-	def setTaskProgress(self, progress:int):
+	def setTaskProgress(self, progress:float):
 		self.taskProgress.emit(progress)
 
 	def setTaskStatus(self, status:str):

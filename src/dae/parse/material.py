@@ -1,7 +1,5 @@
-
-from io import BytesIO
 import sys
-from os import path, getcwd, mkdir
+from os import path, getcwd, mkdir, makedirs
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
@@ -183,19 +181,22 @@ class DDSx(Packed):
 		self._setName(self.name.split('*')[0].split("$")[0])
 
 		if dataOffset == DDSX_HEADER_SIZE:
-			if header == None:
+			self.__singleFile = True
+
+			if header is None:
 				file = open(self.filePath, "rb")
 
 				header = self.Header(BinFile(file.read(DDSX_HEADER_SIZE)))
 
 				file.close()
-		elif header == None:
+		elif header is None:
 			raise NotImplementedError(f"Missing header for packed DDSx (ofs={dataOffset})")
-
+		else:
+			self.__singleFile = False
+		
 		self.__header = header
 
 		self._setSize(self.__header.packedSz)
-
 		self._setValid()
 	
 	def __decompress__(self, data:bytes):
@@ -301,6 +302,24 @@ class DDSx(Packed):
 
 		return data
 	
+	@property
+	def isSingleFile(self):
+		return self.__singleFile
+	
+	def getParentName(self):
+		if self.isSingleFile:
+			return path.basename(path.dirname(self.filePath))
+		else:
+			fName = path.basename(self.filePath).split(".")[0]
+			
+			if fName.endswith("-hq"):
+				fName = fName[:-3]
+			
+			if fName.startswith("hq_tex"):
+				fName = fName[7:]
+			
+			return fName
+
 	# def _setFileName(self, name:str):
 	# 	self.__fileName = name
 
@@ -474,7 +493,75 @@ def getBestTex(self:Terminable, ddsx:list[DDSx]):
 
 	return best
 
-class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture param names instead of arbritrary names
+class TexturePathDict:
+	class Texture:
+		def __repr__(self):
+			return f"<{self.tex}:{self.texType}>"
+		
+		def __init__(self, tex:str, texType:int, texPath:str):
+			self.__tex = tex
+			self.__texType = texType
+			self.__texPath = texPath
+
+		def setType(self, texType:int):
+			self.__texType = texType
+
+		@property
+		def tex(self):
+			return self.__tex
+		
+		@property
+		def texType(self):
+			return self.__texType
+		
+		@property
+		def texPath(self):
+			return self.__texPath
+	
+	def __init__(self, customPath:str = None):
+		self.__d:dict[str, TexturePathDict.Texture] = {}
+		
+		if customPath is None:
+			self.__customPath = "models"
+		else:
+			self.__customPath = f"models/{customPath}"
+
+	def getTexPath(self, texName:str):
+		cachedDDSx = AssetCacher.getCachedAsset(DDSx, texName)
+
+		if len(cachedDDSx) > 0:
+			cachedDDSx:DDSx = cachedDDSx[0]
+
+			return f"{self.customPath}/{cachedDDSx.getParentName()}"
+		else:
+			return self.customPath
+	
+	def get(self, texName:str):
+		return self.__d.get(texName)
+
+	def append(self, 
+			texName:str, 
+			texType:int, 
+			vmt:list[str],
+			vmtKey:str):
+		texName = MaterialData.getTexFileName(texName)
+		texPath = self.getTexPath(texName)
+		tex = TexturePathDict.Texture(texName, texType, texPath)
+		vmt.append(f'${vmtKey} "{texPath}/{texName}"')
+		
+		self.__d[texName] = tex
+
+		return tex
+
+	def getDict(self):
+		return self.__d
+
+	@property
+	def customPath(self):
+		return self.__customPath
+
+
+class MaterialData(Terminable):
 	def __repr__(self):
 		return f"<MaterialData {self.getName()}>"
 	
@@ -491,7 +578,8 @@ class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture
 		self.par:str = None
 
 
-		self.__detailList = None
+		self.__detailList:list[str] = None
+		self.__detailNormalList:list[str, None] = None
 		self.__textureSlots:list[str] = [None for _ in range(11)]
 		self.textures:list[str] = []
 	
@@ -532,7 +620,6 @@ class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture
 
 			if detail is None and i + 1 < len(self.__textureSlots):
 				addComp(components, self.__textureSlots[i + 1])
-
 
 		return "_".join(components)
 
@@ -578,6 +665,8 @@ class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture
 
 		return self.__params
 
+	def getTextureSlots(self):
+		return self.__textureSlots
 
 	def exportTexture(self, texture:str, output:str = getcwd()):
 		outpath = path.join(output, "textures")
@@ -657,7 +746,10 @@ class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture
 	
 	@property
 	def normal(self):
-		return self.__textureSlots[2]
+		if self.detail1IsDiffuse() and len(self.__detailNormalList) > 0:
+			return self.__detailNormalList[0]
+		else:
+			return self.__textureSlots[2]
 	
 	@property
 	def mask(self):
@@ -666,6 +758,7 @@ class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture
 	def __initDetailList__(self):
 		if self.__detailList is None:
 			detailList = []
+			detailNormalList = []
 			detailStart = 4
 
 			if not self.isDynamic() or self.isLayered():
@@ -676,7 +769,12 @@ class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture
 
 				if tex is not None:
 					detailList.append(tex)
+
+					tex = self.__textureSlots[i + 1]
+
+					detailNormalList.append(tex)
 			
+			self.__detailNormalList = detailNormalList
 			self.__detailList = detailList
 
 	@property 
@@ -687,8 +785,95 @@ class MaterialData(Terminable): # TODO: rewrite with actual shader-based texture
 			return self.__detailList[1:]
 		else:
 			return self.__detailList
+	
+	@property 
+	def detailNormal(self):
+		self.__initDetailList__()
+
+		if self.detail1IsDiffuse():
+			return self.__detailNormalList[1:]
+		else:
+			return self.__detailNormalList
+
+	def getVMTcomments(self):
+		return [
+			f"// {self.cls}",
+			"",
+			"// params",
+			"\n\t".join(tuple(f"//\t{k}={v}" for k, v in SafeIter(self, self.getParams().items()))),
+			"",
+			"// textures by slot",
+			"\n\t".join(tuple(f"//\t{k}={v}" for k, v in SafeEnumerate(self, self.getTextureSlots()))),
+			""]
+
+	
+	def getVMT(self, texturePaths:TexturePathDict):
+		
+		params = self.getParams()
+		getScale = lambda x: 1 / float(params.get(x)) if x in params else 1
+
+		vmt = self.getVMTcomments()
+
+		if self.diffuse is not None:
+			diffuse = texturePaths.append(self.diffuse, TEXTURE_GENERIC, vmt, "basetexture")
+
+			if self.detail1IsDiffuse():
+				vmt.append(f"$basetexturetransform center .5 .5 scale {getScale('detail1_tile_u')} {getScale('detail1_tile_v')} rotate 0 translate 0 0")
+		else:
+			diffuse = None
+
+		if self.normal is not None:
+			texturePaths.append(self.normal, TEXTURE_NORMAL, vmt, "bumpmap")
+
+		mask = self.mask
+		detail = self.detail
+
+		if len(detail) > 0 and (mask is None or self.isLayered()):
+			if self.detail1IsDiffuse():
+				tileParam = "detail2"
+			else:
+				tileParam = "detail1"
+			
+			mask = detail[0]
+		else:
+			tileParam = "mask"
 
 
+		if mask is not None:
+			if diffuse is not None:
+				diffuse.setType(TEXTURE_MASKED)
+			
+			texturePaths.append(mask, TEXTURE_GENERIC, vmt, "detail")
+
+			vmt.append("$detailblendmode 4")
+			vmt.append(f"$detailscale [{getScale(f'{tileParam}_tile_u')} {getScale(f'{tileParam}_tile_v')}]")
+
+			if self.isLayered():
+				vmt.append("$detailblendfactor 0.5")
+
+			gamma = params.get(f"{tileParam}_gamma_end")
+
+			if gamma is None:
+				gamma = params.get(f"{tileParam}_gamma_start")
+
+			if gamma is not None:
+				gamma = float(gamma) * 2
+
+				vmt.append(f"$detailtint {'{'} {gamma} {gamma} {gamma} {'}'}")
+
+
+		if self.cls.find("glass") != -1:
+			vmt.append("$translucent 1")
+			vmt.append("$nocull 1")
+		elif "atest" in params and params["atest"] != "128":
+			vmt.append("$alphatest 1")
+			vmt.append("$nocull 1")
+		elif "two_sided" in params:
+			vmt.append("$nocull 1")
+
+		fullVMT = "\n".join(('"VertexLitGeneric"', "{", "\t" + "\n\t".join(vmt), "}"))
+
+		return fullVMT
 
 
 class MaterialTemplateLibrary(Terminable):
