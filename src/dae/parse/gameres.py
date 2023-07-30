@@ -347,17 +347,97 @@ class GameResourcePack(Pack): # may need cleanup / TODO: rewrite like DXP2
 		ofs = self.__resEntriesOfs + realResId * 0xC
 		return f"realResDataOfs1={ofs} realResDataOfs2={ofs + realResId * 0x18}"
 
+class GameResourcePackBuilder:
+	def __init__(self, name:str):
+		self.__name = name
+		self.__resources:list[RealResData] = []
+	
+	class ResEntry:
+		def __init__(self, res:RealResData):
+			self.__res = res
+
+	def save(self, outpath:str = getcwd()):
+		resCnt = len(self.__resources)
+
+		idx = 0x40
+
+		nameMap = b""
+		nameMapIndices = BytesIO()
+
+		for res in self.__resources:
+			nameMapIndices.write(pack("I", idx))
+			name = res.name.encode() + b"\0"
+			nameMap += name
+			idx += len(name)
+		
+		
+		resDataSz = 0x18 * resCnt
+		resEntriesSz = 0xC * resCnt
+		dataStartOfs = 0x40 + len(nameMap) + nameMapIndices.tell() + resDataSz + resEntriesSz
+
+
+		entries = BytesIO()
+		resData = BBytesIO()
+		rawData = BytesIO()
+
+		for k, res in enumerate(self.__resources):
+			curSz = dataStartOfs + rawData.tell() + 0x10
+
+			entries.write(pack("2I2H", res.classId, curSz, k, 0))
+			resData.write(pack("I2H2IQ", res.classId, k, k, 0, 0, 0))
+
+			rawData.write(res.getBin().read())
+
+		fullSz = dataStartOfs + 0x10 + rawData.tell()
+
+		b = BBytesIO()
+		b.write(b"GRP2")
+		b.write(pack("3I", dataStartOfs - 8, dataStartOfs - 4, fullSz - 0x10))
+		b.write(pack("2IQ", 0x40 + len(nameMap), resCnt, 0))
+		b.write(pack("2IQ", 0x40 + len(nameMap) + nameMapIndices.tell(), resCnt, 0))
+		b.write(pack("2IQ", 0x40 + len(nameMap) + nameMapIndices.tell() + entries.tell(), resCnt, 0))
+		b.write(nameMap)
+		b.write(nameMapIndices.getvalue())
+		b.write(entries.getvalue())
+		b.write(resData.getvalue())
+		b.write(bytes(0x10))
+		b.write(rawData.getvalue())
+
+		nameMapIndices.close()
+		entries.close()
+		resData.close()
+		rawData.close()
+
+		value = b.getvalue()
+		b.close()
+
+		filepath = path.join(outpath, self.name + ".grp")
+		file = open(filepath, "wb")
+		file.write(value)
+		file.close()
+
+		log.log(f"Wrote {len(value)} bytes to {filepath}")
+
+
+	def append(self, res:RealResData):
+		self.__resources.append(res)
+	
+
+	@property
+	def name(self):
+		return self.__name
 
 
 if __name__ == "__main__":
-	from parse.realres import RendInst
+	
+	from parse.realres import DynModel, FastPhys, GeomNodeTree
+	from util.misc import matrix_mul
+	from util.assetcacher import AssetCacher
 
-	# from util.assetcacher import ASSETCACHER
-	# import material
-	# import trimesh
 	# # grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\pilots.grp")
 	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\collision_pack.grp")
-	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
+	# grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.grp")
+	grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\germ_gm.grp")
 	# # grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\nvrsk_buildings.grp")
 	# # grp = GameResourcePack("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\abandoned_factory.grp")
 
@@ -372,39 +452,125 @@ if __name__ == "__main__":
 	# # loadDXP("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content\\base\\res\\cars_ri.dxp.bin")
 	# # loadDXP("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\content.hq\\hq_tex\\res\\hq_tex_cars_ri.dxp.bin")
 	# grp.enableCaching()
-	
-	# print(grp.get)
-	# import time
 
-	ri:RendInst = grp.getResourceByName("ural_4320_nrz_1l22_winter")
-	ri.exportObj(0)
+	ske = GeomNodeTree(f"{getcwd()}/test/pz3/clean/pzkpfw_III_ausf_E_skeleton.gnt")
+	AssetCacher.cacheAsset(ske)
+	def skeBuilder(ske:GeomNodeTree):
+		fp = f"{getcwd()}/test/pz3/pzkpfw_III_ausf_E_skeleton.gnt"
 
-	# print("done")
-	# time.sleep(5)
+		nodes = ske.getNodes()
 
-	# del grp
-	
-	# h(grp)
-	# print("del")
-	# time.sleep(5)
-	# # rrd = grp.getResourceByName("c")
-	# # rrd = grp.getResourceByName("pzkpfw_IV_ausf_F")
-	# # rrd = grp.getResourceByName("pilot_china1")
-	# # rrd = grp.getResourceByName("af_central_building")
-	# rrd = grp.getResourceByName("normandy_village_house_2_floor_d_collision")
-	# # rrd = grp.getResourceByName("chevrolet_150_a_collision")
-	# # rrd = grp.getResourceByName("pzkpfw_IV_ausf_F_collision")
-	# # rrd.save()
-	# # print(rrd.getOffset())
-	# ri:CollisionGeom = rrd.getChild()
-	# ri.exportObj()
+		nodeBuff = BBytesIO()
+		nodeNameBuff = BBytesIO()
 
-	# mesh = trimesh.load_mesh(rrd.getName() + ".obj", "obj")
-	# # col = trimesh.interfaces.vhacd.convex_decomposition(mesh)
+		nodeBuffSz = len(nodes) * 160
+		namesOfs = nodeBuffSz
 
-	# # print(col)
-	# # ri.getMatVData().save()
-	# # ri.setMaterials(ASSETCACHER.getModelMaterials(rrd.getName()))
-	# # rrd.save()
-	# # ri.exportObj(0)
+		def writeMatrix(buff:BytesIO, tm):
+			buff.write(pack("16f", 
+		   		tm[0][0], tm[1][0], tm[2][0], tm[3][0],
+		   		tm[0][1], tm[1][1], tm[2][1], tm[3][1],
+		   		tm[0][2], tm[1][2], tm[2][2], tm[3][2],
+		   		tm[0][3], tm[1][3], tm[2][3], tm[3][3]
+		   ))
+
+		for node in nodes:
+			# writeMatrix(nodeBuff, node.tm)
+			# writeMatrix(nodeBuff, multiply_matrix_vector(node.tm, (0.856615, 1.46, -0.000362933, 0)))
+
+			# nodeBuff.write(pack("16f",
+			# 	*(  *(1, 0, 0, node.tm[3][0]),
+			# 		*(0, 1, 0, node.tm[3][1]),
+			# 		*(0, 0, 1, node.tm[3][2]),
+			# 		*(0, 0, 0, 1),
+			# 	)))
+
+			# if node.idx != 1 and node.parent is not None and node.parent.idx == 0:
+			# 	newTm = ((node.tm[0][0], 0, 0, node.tm[0][3]),
+			# 			(0, 0, node.tm[1][2], node.tm[1][3]),
+			# 			(0, node.tm[2][1], 0, node.tm[2][3]),
+			# 			(0, 0, 0, node.tm[3][3]),
+			# 		)
+			# else:
+			# 	newTm = ((node.tm[0][0], 0, 0, node.tm[0][3]),
+			# 			(0, node.tm[1][1], 0, node.tm[1][3]),
+			# 			(0, 0, node.tm[2][2], node.tm[2][3]),
+			# 			(0, 0, 0, node.tm[3][3]),
+			# 		)
+
+			if node.parent is not None and node.parent.idx == 0:
+				x = 0.856615
+				y = 1.46
+				z = -0.000362933
+				newTm = ((1, 0, 0,node.tm[0][3] - x),
+						(0, 1, 0, node.tm[1][3] - y),
+						(0, 0, 1, node.tm[2][3] - z),
+						(0, 0, 0, 1),
+				)
+
+
+				# newTm = ((1, 0, 0, 1),
+				# 		(0, 1, 0, 1),
+				# 		(0, 0, 1, 1),
+				# 		(0, 0, 0, 1),
+				# 	)
+				writeMatrix(nodeBuff, newTm)
+				print(node.name, node.idx, f'"{f"{node.parent.name} ({node.parent.idx})" if node.parent is not None else -1}"')
+				for row in newTm:
+					print(row)
+				print("")
+				for row in node.tm:
+					print(row)
+				print("")
+			else:
+				# nodeBuff.write(pack("16f",
+				# 	*(  *(1, 0, 0, 0),
+				# 		*(0, 1, 0, 0),
+				# 		*(0, 0, 1, 0),
+				# 		*(0, 0, 0, 1),
+				# 	)))
+				writeMatrix(nodeBuff, node.tm)
+			
+			writeMatrix(nodeBuff, node.wtm)
+			
+			nodeBuff.writeInt(node.refOfs)
+			nodeBuff.writeInt(node.refCnt)
+			nodeBuff.write(pack("Q", 0))
+			nodeBuff.writeInt(node.pnt)
+			nodeBuff.writeInt(0)
+			nodeBuff.writeInt(namesOfs)
+			nodeBuff.writeInt(0)
+
+			namesOfs += len(node.name) + 1
+			nodeNameBuff.write(node.name.encode() + b"\0")
+		
+		buff = BBytesIO()
+		buff.writeInt(nodeNameBuff.tell() + nodeBuff.tell())
+		buff.writeInt(len(nodes))
+		buff.write(nodeBuff.getvalue())
+		buff.write(nodeNameBuff.getvalue())
+
+		nodeBuff.close()
+		nodeNameBuff.close()
+		value = buff.getvalue()
+		buff.close()
+		file = open(fp, "wb")
+		file.write(value)
+		file.close()
+
+		log.log(f"Wrote {len(value)} bytes to {fp}"	)
+
+
+	dyn:GeomNodeTree = grp.getResourceByName("towed_at_pak40_skeleton")
+	for node in dyn.getNodes():
+		print(node)
+	# skeBuilder(ske)
+
+
+	# builder = GameResourcePackBuilder("germ_gm")
+	# builder.append(DynModel(f"{getcwd()}/test/pz3/pzkpfw_III_ausf_E.dyn"))
+	# builder.append(FastPhys(f"{getcwd()}/test/pz3/pzkpfw_III_ausf_E_fastphys.fphy"))
+	# builder.append(GeomNodeTree(f"{getcwd()}/test/pz3/pzkpfw_III_ausf_E_skeleton.gnt"))
+	# builder.save(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\content\base\res")
+
 	

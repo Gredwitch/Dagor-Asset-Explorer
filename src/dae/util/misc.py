@@ -1,4 +1,5 @@
 import sys
+import math
 from os import path
 from ctypes import cdll
 from typing import Iterable
@@ -58,8 +59,30 @@ def vectorTransform(matrix, vector):
 	for i in range(3):
 		for j in range(3):
 			result[i] += matrix[i][j] * vector[j]
-		
+	
+	result[0] += matrix[0][3]
+	result[1] += matrix[1][3]
+	result[2] += matrix[2][3]
+
 	return result
+
+
+def matrixToEuler(matrix):
+	# Extract the rotational part of the matrix (upper-left 3x3 submatrix)
+	r11, r12, r13 = matrix[0][:3]
+	r21, r22, r23 = matrix[1][:3]
+
+	# Calculate yaw (rotation around the y-axis)
+	yaw = math.atan2(r13, math.sqrt(r11**2 + r12**2))
+
+	# Calculate pitch (rotation around the x-axis)
+	pitch = math.atan2(-r23, math.sqrt(r21**2 + r22**2))
+
+	# Calculate roll (rotation around the z-axis)
+	roll = math.atan2(r21, r22)
+
+	return pitch, roll, yaw
+
 
 def getVertCenter(verts:list[list[float, float, float]], startV:int, numV:int):
 	x, y, z = 0, 0, 0

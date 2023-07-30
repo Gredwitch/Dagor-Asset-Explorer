@@ -10,7 +10,7 @@ from io import BytesIO
 from util.fileread import *
 from util.enums import *
 from util.decompression import CompressedData
-from util.misc import getResPath, vectorTransform, matrix_mul
+from util.misc import getResPath, vectorTransform, matrix_mul, matrixToEuler
 from util.assetcacher import AssetCacher
 from struct import unpack, pack
 from parse.datablock import *
@@ -112,35 +112,12 @@ class SMD(Terminable):
 		
 		def getNormal(self):
 			return self.normal
-		
-		# def subVert(self, v1, v2):
-		# 	return (v2[0] - v1[0], v2[1] - v1[1], v2[2] - v1[2])
-		
-		# def crossProduct(self, v1, v2):
-		# 	return (v1[1] * v2[2] - v1[2] * v2[1],
-		# 			v1[2] * v2[0] - v1[0] * v2[2],
-		# 			v1[0] * v2[1] - v1[1] * v2[0])
 
-		# def normalize_vector(self, vec):
-		# 	length = sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2])
-
-		# 	return (vec[0] / length, vec[1] / length, vec[2] / length)
-		
-		# def getNormal(self):
-		# 	v1, v2, v3 = self.verts
-
-		# 	edge1 = self.subVert(v1, v2)
-		# 	edge2 = self.subVert(v1, v3)
-
-		# 	face_normal = self.crossProduct(edge1, edge2)
-			
-		# 	return self.normalize_vector(face_normal)
-
-		def getString(self, boneIdx:int = 0, weight:float = 0):
+		def getString(self, boneIdx:int = 0, weight:float = 1):
 			return "\n".join((
 				self.material,
 				*(
-					f"{boneIdx} {self.formatTuple(self.verts[i])} {self.formatTuple(self.normals[i])} {self.formatTuple(self.UVs[i])} {weight}"
+					f"{boneIdx} {self.formatTuple(self.verts[i])} {self.formatTuple(self.normals[i])} {self.formatTuple(self.UVs[i])}"# {weight}"
 					for i in range(3)
 				)
 			))
@@ -159,7 +136,7 @@ class SMD(Terminable):
 		self.__name = name
 		self.__triangles:list[SMD.Triangle] = []
 		self.__boneIdx = 0
-		self.__weight = 0
+		self.__weight = 1
 	
 	def transform(self, matrix):
 		for tri in SafeIter(self, self.__triangles):
@@ -273,6 +250,10 @@ class SourceModel(Terminable):
 			skeSMD = "\n".join((
 				"nodes",
 				'0 "modelHasTooManyBones" -1',
+				"end",
+				"skeleton", 
+				"time 0", 
+				"0 0 0 0 0 0 0",
 				"end"
 			))
 
@@ -285,7 +266,7 @@ class SourceModel(Terminable):
 			self.clearSubTask()
 			log.subLevel()
 
-		fullSMD = "\n".join(("version 1", skeSMD, "skeleton", "time 0", "0 0 0 0 0 0 0", "end"))
+		fullSMD = "\n".join(("version 1", skeSMD))
 
 		if self.__collision is not None:
 			self.setSubTask(self.__collision)
@@ -301,14 +282,14 @@ class SourceModel(Terminable):
 			
 			self.setSubTask(smd)
 
-			if skeleton is not None:
-				node = skeleton.getNodeByName(smd.name)
+			# if skeleton is not None:
+			# 	node = skeleton.getNodeByName(smd.name)
 
-				if node is not None:
-					log.log("Found parent bone")
+			# 	if node is not None:
+			# 		log.log("Found parent bone")
 
-					smd.transform(node.wtm)
-					smd.setBone(node.idx)
+					# smd.transform(node.wtm)
+					# smd.setBone(node.idx)
 
 			smdStr = "\n".join((fullSMD, smd.getString()))
 
@@ -433,11 +414,13 @@ class Model(Terminable):
 	      	vertScale:tuple[float, float, float] = (1, 1, 1), 
 	      	skeleton = None,
 			materials:list[MaterialData] = None,
-			exportName:str = None):
+			exportName:str = None,
+			vertOffet:tuple[float, float, float, float] = (0, 0, 0, 0)):
 		self.__vertScale = vertScale # tuple(v * VERTEX_SCALE for v in vertScale)
 		self.__name = name
 		self.__skeleton:GeomNodeTree = skeleton
 		self.__materials = materials
+		self.__vertOffet = vertOffet
 
 		if exportName is None:
 			exportName = name
@@ -452,9 +435,9 @@ class Model(Terminable):
 
 	def __scaleVertex(self, vertex:tuple[float, float, float]):
 		return (
-				vertex[0] * self.__vertScale[0],
-				vertex[1] * self.__vertScale[1],
-				vertex[2] * self.__vertScale[2],
+				(vertex[0] * self.__vertScale[0]) + self.__vertOffet[0],
+				(vertex[1] * self.__vertScale[1]) + self.__vertOffet[1],
+				(vertex[2] * self.__vertScale[2]) + self.__vertOffet[2],
 		 	  )
 
 	def appendVerts(self, verts:Iterable[tuple[float, float, float]], UVs:Iterable[tuple[float, float]]):
@@ -521,8 +504,11 @@ class Model(Terminable):
 	def getUV(self, id:int) -> tuple[float, float, float]:
 		return self.__getTuple__(self.__uvLists, id)
 	
-	def getVertex(self, id:int, scale:bool = False) -> tuple[float, float, float]:
+	def getVertex(self, id:int, scale:bool = False, parentBone = None) -> tuple[float, float, float]:
 		v = self.__getTuple__(self.__vertLists, id)
+
+		if parentBone is not None:
+			v = vectorTransform(parentBone.wtm, v)
 
 		if not scale:
 			return v
@@ -543,20 +529,25 @@ class Model(Terminable):
 		objUVs = []
 		objFaces = []
 
-		fV = lambda v, i: f"{v[i]:.4f}"
+		fV = lambda v: f"{v:.4f}"
+
+		skeleton = self.__skeleton
 
 		for k in SafeRange(self, len(self.__vertLists)):
 			vList = self.__vertLists[k]
 			uvList = self.__uvLists[k]
 
 			for i in SafeRange(self, len(vList)):
-				v = vList[i]
+				if skeleton is None:
+					v = vList[i]
 
-				objVerts.append(f"v {fV(v, 0)} {fV(v, 1)} {fV(v, 2)}")
+					objVerts.append(f"v {fV(v[0])} {fV(-v[1])} {fV(v[2])}")
+				else:
+					objVerts.append("")
 
 				uv = uvList[i]
 
-				objUVs.append(f"vt {uv[0]:.4f} {uv[1]:.4f}")
+				objUVs.append(f"vt {fV(uv[0])} {fV(uv[1])}")
 
 		ff = lambda x: f"{x + 1}/{x + 1}" 
 
@@ -565,11 +556,21 @@ class Model(Terminable):
 
 			objFaces.append(f"g {obj.name}")
 
+			if skeleton is not None:
+				parentNode = skeleton.getNodeByName(obj.name)
+
 			for i in SafeRange(self, obj.faceCount):
 				if i in obj.materials:
 					objFaces.append(f"usemtl {obj.materials[i]}")
 				
 				f = obj.faces[i]
+
+				if skeleton is not None:
+					for vId in SafeIter(self, f):
+						if len(objVerts[vId]) == 0:
+							v = self.getVertex(vId, parentBone = parentNode)
+							
+							objVerts[vId] = f"v {fV(v[0])} {fV(-v[1])} {fV(v[2])}"
 
 				objFaces.append(f"f {ff(f[0])} {ff(f[1])} {ff(f[2])}")
 
@@ -666,7 +667,10 @@ class Model(Terminable):
 
 		smdFiles:list[SMD] = []
 		
+		invY = lambda v: (v[0], v[1], -v[2])
+
 		normals = [[0.0, 0.0, 0.0] for verts in SafeIter(self, self.__vertLists) for _ in SafeIter(self, verts)]
+		skeleton = self.__skeleton
 
 		for obj in SafeIter(self, self.__objects):
 			obj:Model.Object
@@ -682,6 +686,11 @@ class Model(Terminable):
 			
 			getFcnt = lambda id: (id * MAX_SOURCE_VERTS) // 3
 
+			if skeleton is not None:
+				parentBone = skeleton.getNodeByName(obj.name)
+			else:
+				parentBone = None
+
 			for objId in SafeRange(self, subObjCnt):
 				if subObjCnt > 1:
 					smd = SMD(f"{obj.name}_{objId}")
@@ -696,9 +705,9 @@ class Model(Terminable):
 					f = obj.faces[i]
 					
 					verts = (
-						self.getVertex(f[0], True),
-						self.getVertex(f[1], True),
-						self.getVertex(f[2], True)
+						invY(self.getVertex(f[0], True, parentBone)),
+						invY(self.getVertex(f[1], True, parentBone)),
+						invY(self.getVertex(f[2], True, parentBone))
 					)
 
 					v1, v2, v3 = verts
@@ -723,6 +732,9 @@ class Model(Terminable):
 						normals[f[1]],
 						normals[f[2]]
 					)
+
+				if parentBone is not None and len(skeleton.getNodes()) <= MAX_SOURCE_BONES:
+					smd.setBone(parentBone.idx)
 
 				smdFiles.append(smd)
 			
@@ -1045,9 +1057,9 @@ class GeomNodeTree(RealResData, ModelContainer):
 	def __retrieveData__(self):
 		bfile = self.getBin()
 		
-		file = bfile.readBlock(readInt(bfile) & 0x00_00_FF_FF)
+		file = bfile.readBlock((readInt(bfile) & 0x00_00_FF_FF) + 4)
 		
-		nodeCnt = readInt(file) - 1
+		nodeCnt = readInt(file)
 
 		# self.__nodes = dict(tuple(tuple((v.name, v) for v in (self.Node(file.readBlock(160), file), ))[0] for i in range(nodeCnt)), )
 		nodes = tuple(self.Node(file.readBlock(160), file, i) for i in SafeRange(self, nodeCnt))
@@ -1130,20 +1142,35 @@ class GeomNodeTree(RealResData, ModelContainer):
 	def getSMD(self):
 		skeSMD = ["nodes"]
 
+		posStr = ["skeleton", "time 0"]
+
+		f = lambda x: f"{x:.4f}"
+		s = lambda x: f(x * VERTEX_SCALE)
+
 		for node in SafeIter(self, self.getNodes()):
 			node:GeomNodeTree.Node
 
-			nodeStr = (
+			skeSMD.append(" ".join((
 				str(node.idx),
 				f'"{node.name if node.idx != 0 else "_ROOT"}"',
 				str(node.parent.idx if node.parent is not None else -1)
-			)
+			)))
 
-			skeSMD.append(" ".join(nodeStr))
-
+			euler = matrixToEuler(node.wtm)
+			
+			posStr.append(" ".join((
+				str(node.idx),
+				s(node.tm[0][3]),
+				s(node.tm[1][3]),
+				s(node.tm[2][3]),
+				f(euler[0]),
+				f(euler[1]),
+				f(euler[2]),
+			)))
 		skeSMD.append("end")
+		posStr.append("end")
 
-		return "\n".join(skeSMD)
+		return "\n".join(("\n".join(skeSMD), "\n".join(posStr)))
 
 	@property
 	def nodeCount(self):
@@ -1623,19 +1650,15 @@ class DynModel(RendInst):
 		bbox = (unpack("fff", data.read(0xC)), unpack("fff", data.read(0xC)))
 
 		if blockSz > 0x28:
-			log.log(f"Big modeldata header {hex(blockSz)}: node transforms may be fucked", LOG_WARN)
-
 			self.__bpC254 = unpack("ffff", data.read(0x10))
 			self.__bpC255 = unpack("ffff", data.read(0x10))
-
-			self.__noScale = False
 		else:
-			self.__bpC254 = (1.0, 1.0, 1.0, 1.0)
+			self.__bpC254 = (0, 0, 0, 0)
 			self.__bpC255 = (1.0, 1.0, 1.0, 1.0)
-
-			self.__noScale = True
 		
-		# occ = tuple(unpack("IIfI", file.read(0x10)) for i in SafeRange(self, self.lodCount))
+		log.log(f"bpC254: {self.__bpC254}")
+		log.log(f"bpC255: {self.__bpC255}")
+		
 		self.__occ = tuple(self._readOcc(file) for i in SafeRange(self, self.lodCount))
 	
 	def _readOcc(self, file:BinBlock):
@@ -1784,7 +1807,8 @@ class DynModel(RendInst):
 	      			vertScale = self.__bpC255,
 					skeleton = self.geomNodeTree,
 					materials = self.materials,
-					exportName = self.getExportName(lodId))
+					exportName = self.getExportName(lodId),
+					vertOffet = self.__bpC254)
 
 		log.log(f"Generating LOD {lodId} OBJ for {self.name}")
 		log.addLevel()

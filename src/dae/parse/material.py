@@ -529,7 +529,7 @@ class TexturePathDict:
 	def getTexPath(self, texName:str):
 		cachedDDSx = AssetCacher.getCachedAsset(DDSx, texName)
 
-		if len(cachedDDSx) > 0:
+		if cachedDDSx:
 			cachedDDSx:DDSx = cachedDDSx[0]
 
 			return f"{self.customPath}/{cachedDDSx.getParentName()}"

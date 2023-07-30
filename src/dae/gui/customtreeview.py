@@ -652,6 +652,13 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 
 			texDict = texturePaths.getDict()
 			for k, texName in enumerate(texDict.keys()):
+				texFile = path.join(output, f"textures/{texName}.dds")
+
+				if not path.exists(texFile):
+					log.log(f"Skipping missing texture {texName}")
+
+					continue
+				
 				tex = texturePaths.get(texName)
 
 				texOutPath = path.normpath(path.join(materialsPath, tex.texPath))
@@ -663,7 +670,6 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 
 				makedirs(texOutPath, exist_ok = True)
 
-				texFile = path.join(output, f"textures/{texName}.dds")
 
 
 				if tex.texType == TEXTURE_MASKED:

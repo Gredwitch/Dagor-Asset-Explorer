@@ -13,12 +13,12 @@ To run the program, head to Releases -> Download the latest zip -> Run the exe
 You can either drag and drop files into the tree view or open an asset folder / asset files manually.
 
 
-DAE was designed to fulfill a few purposes:
+DAE was designed to fulfil a few purposes:
 - Export static models without having to go through the hassle of using Ninja Ripper in the CDK
 - Export assets from Enlisted
 - Export models with skeletons
 - Export map props easily
-- (todo) Streamline model export to the Source engine
+- Streamline model export to the Source engine (implemented for demo purposes!)
 
 
 ## What's working:
@@ -35,6 +35,7 @@ Models can be exported to OBJ without skeleton. An MTL file is automaticaly gene
 ## What's not working:
 - DynModels skinned meshes are not exported
 - Most vehicle skeletons are not loaded correctly
+- Collision models are offset
 
 ## Map prop export demo
 
