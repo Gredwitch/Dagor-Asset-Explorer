@@ -1006,6 +1006,10 @@ def generateMaterialData(textures:list[str], mvdMats:list[MatVData.Material], pa
 
 		mat.cls = v.shaderClass
 		mat.par = ""
+		mat.diff = v.diff
+		mat.amb = v.amb
+		mat.spec = v.spec
+		mat.emis = v.emis
 		
 		for texId, texKey in iterator(v.textures):
 			if texKey == 0xFFFFFFFF:

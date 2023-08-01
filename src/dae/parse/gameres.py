@@ -357,6 +357,9 @@ class GameResourcePackBuilder:
 			self.__res = res
 
 	def save(self, outpath:str = getcwd()):
+		log.log(f"Generating Game Resource Pack {self.__name} ")
+		log.addLevel()
+
 		resCnt = len(self.__resources)
 
 		idx = 0x40
@@ -364,6 +367,7 @@ class GameResourcePackBuilder:
 		nameMap = b""
 		nameMapIndices = BytesIO()
 
+		log.log("Generating name map")
 		for res in self.__resources:
 			nameMapIndices.write(pack("I", idx))
 			name = res.name.encode() + b"\0"
@@ -380,6 +384,8 @@ class GameResourcePackBuilder:
 		resData = BBytesIO()
 		rawData = BytesIO()
 
+		log.log("Generating resource data")
+		log.addLevel()
 		for k, res in enumerate(self.__resources):
 			curSz = dataStartOfs + rawData.tell() + 0x10
 
@@ -387,6 +393,9 @@ class GameResourcePackBuilder:
 			resData.write(pack("I2H2IQ", res.classId, k, k, 0, 0, 0))
 
 			rawData.write(res.getBin().read())
+
+			log.log(res)
+		log.subLevel()
 
 		fullSz = dataStartOfs + 0x10 + rawData.tell()
 

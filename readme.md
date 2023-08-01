@@ -26,6 +26,7 @@ DAE was designed to fulfil a few purposes:
 - Exporting most RendInst and DynModels
 - Exporting map prop layout
 - ~~Exporting sounds~~ (the program used to have FMod bank support, but I removed it after rewriting it and lacked the courage to add it back)
+- Exporting models to Source MDL (SMD, QC, VMT, and VTF generation)
 
 You should export all models to DMF as it is the only format with full skeleton and material support. Download the [Blender importer here](https://github.com/Gredwitch/Dagor-Asset-Explorer-Tools).
 
@@ -34,7 +35,6 @@ Models can be exported to OBJ without skeleton. An MTL file is automaticaly gene
 
 ## What's not working:
 - DynModels skinned meshes are not exported
-- Most vehicle skeletons are not loaded correctly
 - Collision models are offset
 
 ## Map prop export demo

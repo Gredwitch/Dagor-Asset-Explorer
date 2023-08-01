@@ -4,12 +4,12 @@ from os import path, getcwd
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 import util.log as log
-import math
 # from math import *
 from struct import unpack
 from util.fileread import *
-from util.terminable import SafeRange, Terminable, FilePathable, SafeIter
+from util.terminable import SafeRange, Terminable, FilePathable, SafeIter, SafeEnumerate
 from util.enums import *
+from abc import ABC, abstractmethod
 
 # from misc import pprint, loadDLL
 # from assetcacher import ASSETCACHER
@@ -89,12 +89,19 @@ class InstShaderMeshResource(Terminable):
 	
 
 class MatVData(Terminable, FilePathable): # stores material and vertex data :D	
-	def __init__(self, file:BinFile, name:str = None, texCnt:int = 0, matCnt:int = 0, filePath:str = None):
+	def __init__(self, 
+	      		file:BinFile, 
+				name:str = None, 
+				texCnt:int = 0, 
+				matCnt:int = 0, 
+				filePath:str = None,
+				flag:int = MVD_NORMAL):
 		FilePathable.__init__(self, filePath, name, file.getSize())
 
 		self.__texCnt = texCnt
 		self.__matCnt = matCnt
 		self.__file = file
+		self.__flag = flag
 
 		self.__dataComputed = False
 
@@ -156,7 +163,10 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 			self.shaderClass:str = None
 			self.textures:tuple[int] = None # 16 elements
 			self.data:BinBlock = None # 176 bytes big
-			self.floatArray:tuple[float] = None # 16 elements
+			self.diff:tuple[float] = None # 16 elements
+			self.amb:tuple[float] = None # 16 elements
+			self.spec:tuple[float] = None # 16 elements
+			self.emis:tuple[float] = None # 16 elements
 
 
 	def __processMaterial__(self, mat:Material, ofs:int, idx:int):
@@ -167,9 +177,10 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		log.log(f"Material {idx} @ {file.tell()}:")
 		log.addLevel()
 
-		floatArray = unpack("f" * 16, file.read(0x40))
-
-		log.log(f"float array     = {floatArray}")
+		diff = unpack("4f", file.read(0x10))
+		amb = unpack("4f", file.read(0x10))
+		emis = unpack("4f", file.read(0x10))
+		spec = unpack("4f", file.read(0x10))
 
 		unknown = readInt(file)
 
@@ -211,7 +222,10 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		mat.shaderClass = shader
 		mat.textures = textureIDs
 		mat.data = BinBlock(file, dataOfs, 0xB0)
-		mat.floatArray = floatArray
+		mat.diff = diff
+		mat.amb = amb
+		mat.spec = spec
+		mat.emis = emis
 
 		return mat
 
@@ -234,7 +248,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 	#
 
 	class GlobalVertexData:
-		def __init__(self, file:BinBlock, absOfs:int, idx:int):
+		def __init__(self, file:BinBlock, absOfs:int, idx:int, flag:int):
 			self.__ofs = absOfs + idx * 0x20
 
 			self.__idx = idx
@@ -251,7 +265,8 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 			self.__iCnt = readInt(file)
 
-			self.__storageFormat = readInt(file)
+			self.__storageFormat = readInt(file) + flag * 10
+
 
 			# 8 null-bytes remainder
 
@@ -285,6 +300,14 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 			return self.__iSz
 
 
+		@property
+		def flags(self):
+			return self.__flags
+		@property
+		def bf_14(self):
+			return self.__bf_14
+
+
 	def __computeGVData__(self, cnt:int, ofs:int):
 		file = self.__file
 		
@@ -293,7 +316,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		log.log(f"Computing {cnt} global vertex data @ {ofs}")
 		log.addLevel()
 
-		self.__gvdata = tuple(self.GlobalVertexData(file.readBlock(0x20), ofs, i) for i in SafeRange(self, cnt))
+		self.__gvdata = tuple(self.GlobalVertexData(file.readBlock(0x20), ofs, i, self.__flag) for i in SafeRange(self, cnt))
 
 		self.__vdStartOfs = ofs + cnt * 0x20
 
@@ -460,254 +483,125 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 			log.subLevel()
 		
-		def __unpackShortUV__(self, file:BinFile):
-			return (readSignedShort(file) / 4096, 1 + (-readSignedShort(file) / 4096))
-
-		def __unpackUV__(self, file:BinFile):
-			uv = unpack("ff",file.read(8))
-
-			return (uv[0], -uv[1])
-
-		def __unpackVertex__(self, file:BinFile):
-			return list(unpack("fff", file.read(12)))
-
-		def __unpackShortVertex__(self, file:BinFile):
-			return [readSignedShort(file) / 32768, readSignedShort(file) / 32768, readSignedShort(file) / 32768]
-			# return (-readSignedShort(file),readSignedShort(file),readSignedShort(file))
+		@property
+		def globalVertexData(self):
+			return self.__gvData
 		
+		class PARSECLASS(ABC):
+			@abstractmethod
+			def read(self, file:BinFile):
+				...
 
+		class VERTEX(PARSECLASS):
+			...
+		
+		class UV(PARSECLASS):
+			...
+
+		class SHORT_VERTEX(VERTEX):
+			def read(self, file:BinFile):
+				return [readSignedShort(file) / 32768, readSignedShort(file) / 32768, readSignedShort(file) / 32768]
+
+		class FLOAT_VERTEX(VERTEX):
+			def read(self, file:BinFile):
+				return list(unpack("fff", file.read(12)))
+
+		class NO_UV(UV):
+			def read(self, file:BinFile):
+				return (0, 0)
+
+		class SHORT_UV(UV):
+			def read(self, file:BinFile):
+				return (readSignedShort(file) / 4096, 1 + (-readSignedShort(file) / 4096))
+
+		class FLOAT_UV(UV):
+			def read(self, file:BinFile):
+				uv = unpack("ff", file.read(8))
+
+				return (uv[0], -uv[1])
+
+		class PADDING(PARSECLASS):
+			def __init__(self, sz:int):
+				self.sz = sz
+			
+			def read(self, file:BinFile):
+				file.seek(self.sz, 1)
+
+
+		__FORMATS:dict[int, dict[int, tuple[PARSECLASS]]] = {
+			1:{
+				12:(FLOAT_VERTEX(), NO_UV())
+			  },
+			2:{
+				12:(SHORT_VERTEX(), PADDING(2), SHORT_UV()),
+				16:(FLOAT_VERTEX(), SHORT_UV())
+			  },
+			3:{
+				16:(SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+				24:(FLOAT_VERTEX(), PADDING(4), FLOAT_UV()),
+			  },
+			4:{
+				20:(PADDING(4), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+				# 24:(),
+				28:(FLOAT_VERTEX(), PADDING(4), FLOAT_UV(), PADDING(4)),
+			  },
+			5:{
+				24:(SHORT_UV(), SHORT_VERTEX(), PADDING(14)),
+				28:(FLOAT_VERTEX(), PADDING(12), SHORT_UV()),
+			  },
+			6:{
+				32:(FLOAT_VERTEX(), PADDING(4), SHORT_UV(), PADDING(12)) # UVs?
+			  },
+			
+			13:{
+				16:(SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+			  },
+			15:{
+				24:(PADDING(8), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+			  },
+			16:{
+				28:(PADDING(12), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+			  },
+			17:{
+				32:(NO_UV(), PADDING(8), SHORT_VERTEX(), PADDING(18)),
+				36:(FLOAT_VERTEX(), PADDING(8), SHORT_UV(), PADDING(12))
+			  },
+			25:{
+				24:(SHORT_VERTEX(), PADDING(6), SHORT_UV(), PADDING(8)),
+			  },
+		}
+
+		def getParser(self, format:int, vStride:int):
+			if format in self.__FORMATS:
+				return self.__FORMATS[format].get(vStride)
+			else:
+				return None
 
 		def __processVertices__(self, file:BinBlock):
 			format = self.__gvData.getStorageFormat()
 			vStride = self.__gvData.getVertexStride()
 			vCnt = self.__gvData.getVertexCnt()
 
-			shortVerts = False
-			verts = []
-			UVs = []
+			verts:list[list[float, float, float]] = []
+			UVs:list[list[float, float]] = []
 
-			log.log(f"Processing {vCnt} vertices vFormat={format} vStride={vStride}")
+			parser = self.getParser(format, vStride)
 
-			if format == 3:
-				stride = vStride - 20
-
-				if vStride == 16:
-					shortVerts = True
-
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackShortVertex__(file))
-
-						file.seek(6, 1)
-
-						UVs.append(self.__unpackShortUV__(file))
-				elif vStride == 24:
-					# { float[3] Coords, byte[4] Unknown, float[2] UVs }
-
-					bigUVs = True
-
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackVertex__(file))
-
-						file.seek(4,1)
-
-						UVs.append(self.__unpackUV__(file)) # not working!!
-				elif vStride >= 20:
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackVertex__(file))
-
-						file.seek(4,1)
-
-						UVs.append(self.__unpackShortUV__(file))
-
-						file.seek(max(0, stride), 1)
-				elif vStride == 12:
-					shortVerts = True
-
-					for i in SafeRange(self, vCnt):
-						UVs.append(self.__unpackShortUV__(file))
-
-						verts.append(self.__unpackShortVertex__(file))
-
-						file.seek(2,1)
-				else:
-					log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
-
-					self.__unimplemented = True
-					file.seek(vCnt * vStride,1)
-
-			elif format == 4:
-				stride = vStride - 20
-
-				if vStride == 20:
-					# { byte[4] Unknown, short[3] Coords, byte[6] Unknown, short[2] UVs }
-
-					shortVerts = True
-
-					for i in SafeRange(self, vCnt):
-						file.seek(4,1)
-
-						verts.append(self.__unpackShortVertex__(file))
-
-						file.seek(6,1)
-
-						UVs.append(self.__unpackShortUV__(file))
-				elif vStride == 28:
-					bigUVs = True
-
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackVertex__(file))
-
-						file.seek(4,1) # flags?
-
-						UVs.append(self.__unpackUV__(file))
-
-						file.seek(4,1) # idk
-				else:
-					log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
-
-					self.__unimplemented = True
-					file.seek(vCnt * vStride,1)
-			elif format == 2:
-				if vStride == 16:
-					stride = vStride - 16
-
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackVertex__(file))
-
-						UVs.append(self.__unpackShortUV__(file))
-
-						file.seek(stride, 1)
-				elif vStride == 12:
-					shortVerts = True
-
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackShortVertex__(file))
-
-						file.seek(2, 1)
-
-						UVs.append(self.__unpackShortUV__(file))
-
-				# elif vStride == 12:
-				# shortVerts = True
-
-				# for i in SafeRange(self, vCnt):
-				# 	verts.append(self.__unpackVertex__(file))
-				# 	# verts.append(self.__unpackShortVertex__(file))
-
-				# 	UVs.append(self.__unpackShortUV__(file))
-
-				# 	file.seek(stride, 1)
-				else:
-					log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
-
-					self.__unimplemented = True
-			elif format == 5:
-				if vStride == 24:
-					shortVerts = True
-					
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackShortVertex__(file))
-
-						file.seek(8, 1)
-
-						file.seek(6, 1)
-
-						UVs.append(self.__unpackShortUV__(file))
-				elif vStride == 28:
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackVertex__(file))
-
-						file.seek(12, 1)
-
-						UVs.append(self.__unpackShortUV__(file))
-				elif vStride == 36:
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackVertex__(file))
-
-						file.seek(4, 1)
-
-						UVs.append(self.__unpackUV__(file))
-
-						file.seek(12, 1)
-				else:
-					log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
-
-					self.__unimplemented = True
-			elif format == 1:
-				if vStride == 8:
-					shortVerts = True
-
-					for i in SafeRange(self, vCnt):
-						verts.append(self.__unpackShortVertex__(file))
-
-						file.seek(2,1)
-
-						# UVs.append(self.__unpackShortUV__(file))
-						bigUVs = True # work around to bypass line "if not bigUVs"
-				else:
-					log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
-			elif format == 6:
-				shortVerts = True
-
-				if vStride == 26:
-					for i in SafeRange(self, vCnt):
-						file.seek(4, 1)
-
-						UVs.append(self.__unpackShortUV__(file))
-
-						file.seek(8, 1)
-
-						verts.append(self.__unpackShortVertex__(file))
-
-						file.seek(6, 1)
-				elif vStride == 28:
-					for i in SafeRange(self, vCnt):
-						file.seek(12, 1)
-
-						verts.append(self.__unpackShortVertex__(file))
-
-						file.seek(6, 1)
-
-						UVs.append(self.__unpackShortUV__(file))
-			# 	else:
-			# 		log.log(f"Unimplemented vertex stride {vStride} for storage format {format}", LOG_ERROR)
-				
+			if parser is None:
+				raise Exception(f"Unimplemented storage format {format}-{vStride}")
 			else:
-				log.log(f"Unimplemented storage format {format}", LOG_ERROR)
+				log.log(f"Processing {vCnt} vertices vFormat={format} vStride={vStride}")
 
-				self.__unimplemented = True
-			
-			if shortVerts:
-				log.log("Short vertex format warning !", LOG_WARN)
-				# log.log("Processing short verts")
+				for _ in SafeRange(self, vCnt):
+					for parseClass in SafeIter(self, parser):
+						parseClass:MatVData.VertexData.PARSECLASS
 
-				# maxVx = max(map(lambda pair: abs(pair[0]), verts))
-				# maxVy = max(map(lambda pair: abs(pair[1]), verts))
-				# maxVz = max(map(lambda pair: abs(pair[2]), verts))
-				# maxV = max(maxVx, maxVy, maxVz)
-				# print(maxV)
-
-				# if maxV == 0:
-				# 	getV = lambda c: 0
-				# else:
-				# 	getV = lambda c: c / maxV
-
-				# verts = tuple([getV(vert[0]), getV(vert[1]), getV(vert[2])] for vert in verts)
-			
-			# if shortVerts: # old
-			# 	log.log("Processing short verts")
-
-			# 	maxVx = max(map(lambda pair: abs(pair[0]), verts))
-			# 	maxVy = max(map(lambda pair: abs(pair[1]), verts))
-			# 	maxVz = max(map(lambda pair: abs(pair[2]), verts))
-			# 	maxV = max(maxVx,maxVy,maxVz)
-			# 	print(maxV)
-			# 	if maxV == 0:
-			# 		getV = lambda c: 0
-			# 	else:
-			# 		getV = lambda c: c / maxV
-
-			# 	verts = tuple((getV(vert[0]), getV(vert[1]), getV(vert[2])) for vert in verts)
+						if isinstance(parseClass, MatVData.VertexData.PADDING):
+							parseClass.read(file)
+						elif isinstance(parseClass, MatVData.VertexData.VERTEX):
+							verts.append(parseClass.read(file))
+						elif isinstance(parseClass, MatVData.VertexData.UV):
+							UVs.append(parseClass.read(file))
 
 			self.__verts = verts
 			self.__UVs = UVs
@@ -822,6 +716,36 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 	def getVDCount(self):
 		return len(self.__gvdata)
+	
+	def getVertexDataByLOD(self, lodId:int):
+		if not self.__dataComputed:
+			self.computeData()
+		
+		vDataList:list[MatVData.VertexData] = []
+		
+		for k, gvData in SafeEnumerate(self, self.__gvdata):
+			gvData:MatVData.GlobalVertexData
+
+			vDlodId = (gvData.flags & 0xF000) >> 12
+
+			if vDlodId == lodId:
+				vDataList.append(self.getVertexData(k))
+			
+		return vDataList
+
+
+
+	def getVertexDataOffset(self, idx:int):
+		if not self.__dataComputed:
+			self.computeData()
+		
+		ofs = self.__vdStartOfs
+
+		for i in SafeRange(self, idx):
+			gvData = self.__gvdata[i]
+			ofs += gvData.getFullVertexDataSz()
+
+		return ofs
 
 	def getVertexData(self, idx:int):
 		if not self.__dataComputed:

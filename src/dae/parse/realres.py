@@ -442,6 +442,7 @@ class Model(Terminable):
 
 	def appendVerts(self, verts:Iterable[tuple[float, float, float]], UVs:Iterable[tuple[float, float]]):
 		self.__vertLists.append(tuple(self.__scaleVertex(v) for v in verts))
+		
 		self.__uvLists.append(UVs)
 
 	def getVertCount(self):
@@ -470,22 +471,31 @@ class Model(Terminable):
 		mdl:Model
 		
 		vOfs = self.getVertCount()
-		
+
+		log.log(f"Merging {mdl.name} with {self.name}")
+		log.addLevel()
+
+		listCnt = len(self.__vertLists)
+
 		for i in SafeRange(self, len(mdl.__vertLists)):
 			verts = mdl.__vertLists[i]
 			UVs = mdl.__uvLists[i]
 
 			self.appendVerts(verts, UVs)
-
-		print("merging", vOfs)
+		
+		log.log(f"Added {len(mdl.__vertLists)} vertex lists to our {listCnt} vertex lists (offset = {vOfs})")
 
 		for obj in SafeIter(self, mdl):
-			obj:self.Object
+			obj:Model.Object
 
 			newObj = self.newObject(obj.name)
+			
+			log.log(f"Merging {obj.name}'s {len(obj.faces)} faces")
 
 			for face in SafeIter(self, obj.faces):
 				newObj.appendFace(tuple(idx + vOfs for idx in face))
+		
+		log.subLevel()
 
 	def __getTuple__(self, listOfLists:list[list[tuple]], id:int):
 		ofs = 0
@@ -541,10 +551,10 @@ class Model(Terminable):
 				if skeleton is None:
 					v = vList[i]
 
-					objVerts.append(f"v {fV(v[0])} {fV(-v[1])} {fV(v[2])}")
+					objVerts.append(f"v {fV(v[0])} {fV(v[1])} {fV(v[2])}")
 				else:
 					objVerts.append("")
-
+				
 				uv = uvList[i]
 
 				objUVs.append(f"vt {fV(uv[0])} {fV(uv[1])}")
@@ -570,7 +580,7 @@ class Model(Terminable):
 						if len(objVerts[vId]) == 0:
 							v = self.getVertex(vId, parentBone = parentNode)
 							
-							objVerts[vId] = f"v {fV(v[0])} {fV(-v[1])} {fV(v[2])}"
+							objVerts[vId] = f"v {fV(v[0])} {fV(v[1])} {fV(v[2])}"
 
 				objFaces.append(f"f {ff(f[0])} {ff(f[1])} {ff(f[2])}")
 
@@ -1057,7 +1067,11 @@ class GeomNodeTree(RealResData, ModelContainer):
 	def __retrieveData__(self):
 		bfile = self.getBin()
 		
-		file = bfile.readBlock((readInt(bfile) & 0x00_00_FF_FF) + 4)
+		sz = readInt(bfile)
+		flags = (sz & 0xFFFF_0000) >> 16
+		sz &= 0x0000_FFFF
+
+		file = bfile.readBlock()
 		
 		nodeCnt = readInt(file)
 
@@ -1115,6 +1129,8 @@ class GeomNodeTree(RealResData, ModelContainer):
 			self.print_tree(child, indent + 1)
 	
 	def getDMF(self):
+		log.log("Generating skeleton DMF")
+
 		buffer = BBytesIO()
 
 		buffer.writeInt(len(self.getNodes()))
@@ -1272,6 +1288,7 @@ class RendInst(RealResData, ModelContainer):
 		num = readInt(file)
 		self.mvdHdrSz = num & 0x3FFFFFFF
 		self.mvdHdrFlag = num != self.mvdHdrSz
+		# self.mvdHdrNum = num
 
 		if texCnt == matCnt == 0xFFFFFFFF:
 			log.log("Pulling material and texture count from GameResDesc") # TODO
@@ -1317,6 +1334,8 @@ class RendInst(RealResData, ModelContainer):
 
 
 	def _readMatVData(self, file:BinBlock):
+		self.mvdOfs = file.tell()
+
 		if self.vdataNum == 0:
 			log.log("vDataNum == 0, skipping MVD")
 
@@ -1388,23 +1407,32 @@ class RendInst(RealResData, ModelContainer):
 
 		log.subLevel()
 
-	def generateMaterials(self):
-		mvd = self.mvd
-
-		if (self.materials is not None 
-			or self.textures is None
-			or mvd is None):
-			return
-		
+	def _generateMVDmaterials(self, mvd:MatVData):
 		mvd.computeData()
 
 		materials = generateMaterialData(self.textures, mvd.getMaterials(), self)
 		computeMaterialNames(materials, self)
 
+		return materials
+
+	def generateMaterials(self):
+		if self.materials is not None or self.textures is None:
+			return False
+
+		materials = None
+
+		if self.mvd is not None:
+			materials = self._generateMVDmaterials(self.mvd)
+		
+		if materials is not None and len(materials) == 0:
+			materials = None
+
 		self._setMaterials(materials)
 
+		return True
 	
 	def getModel(self, lodId:int):
+		self.computeData()
 		self.generateMaterials()
 
 		if self.materials is None and self.textures is None:
@@ -1615,7 +1643,15 @@ class DynModel(RendInst):
 			log.subLevel()
 
 			log.subLevel()
-		
+	
+
+	def generateMaterials(self):
+		if (not super().generateMaterials() 
+			or self.materials is not None
+			or self.skinnedMesh is None):
+			return
+
+		self._setMaterials(self._generateMVDmaterials(self.skinnedMesh))
 	
 	def computeData(self):
 		if self.dataComputed:
@@ -1631,7 +1667,7 @@ class DynModel(RendInst):
 		self._readModelData(file)
 		self._readSceneNodes(file.readBlock(readInt(file)))
 		self._readLods(file)
-		self._readShaderSkinnedMesh(file)
+		self._readSkinnedMesh(file)
 
 		self._setDataComputed()
 	
@@ -1717,9 +1753,9 @@ class DynModel(RendInst):
 
 		log.subLevel()
 
-	def _readShaderSkinnedMesh(self, mfile:BinBlock):
-		self.__skinnedMesh:list[MatVData] = []
-		
+	def _readSkinnedMesh(self, mfile:BinBlock):
+		self.__skinnedMesh:MatVData = None
+
 		if mfile.tell() + 4 >= mfile.getSize():
 			return
 		
@@ -1727,33 +1763,37 @@ class DynModel(RendInst):
 
 		if cnt == 0:
 			return
+		elif cnt > 1:
+			raise Exception("Multiple skinned mesh!")
 
-		log.log(f"Loading {cnt} shader skinned mesh resources @ {mfile.tell()}")
+		log.log(f"Loading skinned mesh resource @ {mfile.tell()}")
 		log.addLevel()
 
-		for i in SafeRange(self, cnt):
-			log.log(f"{cnt}:")
-			log.addLevel()
+		file = mfile.readBlock(readInt(mfile))
+		ptr = readLong(file)
 
-			file = mfile.readBlock(readInt(mfile))
-			ptr = readLong(file)
+		texCnt = readInt(file)
+		matCnt = readInt(file)
 
-			texCnt = readInt(file)
-			matCnt = readInt(file)
+		unkn1 = readInt(file)
+		unkn2 = readInt(file)
 
-			unknown = readInt(file)
-			unknown = readInt(file)
+		log.log(f"ptr		= {ptr}")
+		log.log(f"texCnt	= {texCnt}")
+		log.log(f"matCnt	= {matCnt}")
+		log.log(f"unkn1 	= {unkn1}")
+		log.log(f"unkn2 	= {hex(unkn2)}")
 
-			mvd = MatVData(CompressedData(file).decompressToBin(), f"{self.name}_skinned_{i}")
-			# mvd.save()
-			
-			self.__skinnedMesh.append(mvd)
-			# log.log(f"SMVD end: {mfile.tell()}")
-			
-			# print(self.__bpC254)
+		mvd = MatVData(CompressedData(file).decompressToBin(), 
+		 				f"{self.name}_skinned",
+						flag = MVD_SKINNED if self.mvdHdrFlag else MVD_SKINNED_FLAG)
+		# mvd.save()
+		
+		# mvd.unknown = unkn1
+		# mvd.flags = unkn2
 
-
-			log.subLevel()
+		self.__skinnedMesh = mvd
+		# log.log(f"SMVD end: {mfile.tell()}")
 
 		log.subLevel()
 
@@ -1761,46 +1801,57 @@ class DynModel(RendInst):
 		self.__skeleton = skeleton
 
 	@property
+	def skinnedMesh(self):
+		return self.__skinnedMesh
+
+	@property
 	def geomNodeTree(self):
 		return self.__skeleton
 
 	def getSkinnedMeshModel(self, lodId:int):
-		if len(self.__skinnedMesh) == 0:
+		mvd = self.skinnedMesh
+
+		if mvd is None:
 			log.log("No skinned mesh found")
 
 			return None
 		
-		# mdl = Model(self.__bpC255)
 		mdl = Model(f"{self.name}_skinnedmesh")
 
-		vdId = (self.lodCount - 1) - lodId
 		vOfs = 0
 
-		for k, mvd in SafeEnumerate(self, self.__skinnedMesh):
-			try:
-				vData = mvd.getVertexData(vdId)
-			except:
-				continue
-			log.log(f"Exporting Skinnedmesh {k}")
-			log.addLevel()
+		log.log(f"Gathering vertex data for skinned MVD")
+		log.addLevel()
 
-			obj = mdl.newObject(f"skinnedmesh_{k}")
+		vDataList = mvd.getVertexDataByLOD(lodId)
 
-			# mvd.save()
+		if len(vDataList) == 0:
+			log.log(f"No vertex data found")
+		else:
+			for i, vData in SafeEnumerate(self, vDataList):
+				vData:MatVData.VertexData
 
-			verts, UVs, faces = vData.getVertices(), vData.getUVs(), vData.getFaces()
-			mdl.appendVerts(verts, UVs)
+				log.log(f"Exporting Skinnedmesh {i}")
+				log.addLevel()
 
-			for face in SafeIter(self, faces):
-				obj.appendFace(tuple(f + vOfs for f in face))
+				obj = mdl.newObject(f"skinnedmesh_{i}")
 
-			vOfs += len(verts)
+				verts, UVs, faces = vData.getVertices(), vData.getUVs(), vData.getFaces()
+				mdl.appendVerts(verts, UVs)
 
-			log.subLevel()
-		
+				for face in SafeIter(self, faces):
+					obj.appendFace(tuple(f + vOfs for f in face))
+
+				vOfs += len(verts)
+
+				log.subLevel()
+
+		log.subLevel()
+
 		return mdl
 
 	def getModel(self, lodId:int):
+		self.computeData()
 		self.generateMaterials()
 
 		mdl = Model(self.name,
@@ -1909,7 +1960,7 @@ class DynModel(RendInst):
 			mdl.mergeModel(skinnedMdl)
 
 		return mdl
-	
+
 
 class CollisionGeom(RealResData, ModelContainer):
 	@classmethod
@@ -2370,8 +2421,12 @@ REALRES_CLASSES_LIST:tuple[type[RealResData]] = (
 REALRES_CLASSES_DICT:dict[int, type[RealResData]] = {v.staticClassId:v for v in REALRES_CLASSES_LIST}
 
 if __name__ == "__main__":
-	from parse.gameres import GameResDesc, GameResourcePack
+	from parse.gameres import GameResDesc, GameResourcePack, GameResourcePackBuilder
 	from parse.material import DDSxTexturePack2
+	
+	from subprocess import Popen
+	from util.settings import SETTINGS
+
 	def loadDXP(path):
 		dxp = DDSxTexturePack2(path)
 
@@ -2466,28 +2521,6 @@ if __name__ == "__main__":
 			except:
 				pass
 
-
-	import os
-
-	def findGrpInDir(dir:str):
-		packs:list[GameResourcePack] = []
-
-		for file in os.listdir(dir):
-			if file.split(".")[-1] == "grp":
-				packs.append(GameResourcePack(path.join(dir, file)))
-		return packs
-	
-	# packs = findGrpInDir(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\content\base\res")
-	
-
-	# grp = GameResourcePack(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\content\base\res\abandoned_factory.grp")
-	
-	# mdl:RendInst = grp.getResourceByName("af_central_building")
-	
-
-	from subprocess import Popen
-	from util.settings import SETTINGS
-
 	def doColTest(mdlname):
 		AssetCacher.cacheAsset(CollisionGeom(rf"C:\Users\qhami\Documents\WTBS\DagorAssetExplorer\output\{mdlname}_collision.col"))
 		mdl = RendInst(rf"C:\Users\qhami\Documents\WTBS\DagorAssetExplorer\output\{mdlname}.ri")
@@ -2502,20 +2535,77 @@ if __name__ == "__main__":
 			path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH)), 
 			qc]).wait()
 
-	doColTest("bedfors_sb3_comair")
-	doColTest("bmw_r12_with_cradle")
-	doColTest("buick_lesabre")
+
+	import os
+
+	def findGrpInDir(dir:str):
+		packs:list[GameResourcePack] = []
+
+		for file in os.listdir(dir):
+			if file.split(".")[-1] == "grp":
+				packs.append(GameResourcePack(path.join(dir, file)))
+		return packs
+	
+
+	
+
+	# grp = GameResourcePack(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\content\base\res\fr_gm.grp")
+	
+	models:list[DynModel] = []
+	
+	def getAllModels(dir:str):
+		for f in os.listdir(dir):
+			ext = f.split(".")[-1]
+
+			if ext == "ri":
+				# mdl = RendInst(f"{dir}/{f}")
+				continue
+			elif ext == "dyn":
+				mdl = DynModel(f"{dir}/{f}")
+			else:
+				continue
+			
+			try:
+				mdl.computeData()
+
+				if mdl.skinnedMesh is None:
+					continue
+
+				models.append(mdl)
+			except:
+				pass
+
+	# getAllModels("output/pilots")
+	# getAllModels("output/germ_gm")
+
+	# flagsDict = {}
+
+	# for mdl in models:
+	# 	mdl.getModel(0).exportObj("output/pilots")
+	# 	print(hex(mdl.mvdHdrNum), mdl.name)
+
+	# mdl = DynModel("output/germ_gm/pzkpfw_VI_ausf_B_tiger_kwk_105_dmg.dyn")
+	mdl = DynModel("output/cosmonaut.dyn")
+	mdl.computeData()
+	mdl.skinnedMesh.computeData()
+	# # mdl.skinnedMesh.save()
+	# mdl.skinnedMesh.quickExportVDataToObj(0)
+	# print(mdl.skinnedMesh.getVertexDataOffset(1))
+
+	# mdl.skinnedMesh[0].computeData()
+	# mdl.skinnedMesh[0].save()
+
+	# mdl.getSkinnedMeshModel(0).exportObj()
+	# mdl.getModel(0).exportObj()
+	
+
+
+	# doColTest("bedfors_sb3_comair")
+	# doColTest("bmw_r12_with_cradle")
+	# doColTest("buick_lesabre")
 	# findUniqueShaderClassesGRP(packs)
 	# findUniqueShaderClasses(desc)
 		  
 
 	# mdl = RendInst(r"C:\Users\qhami\Documents\WTBS\DagorAssetExplorer\output\chevrolet_150_a.ri")
-	# mdl = DynModel(r"C:\Users\qhami\Documents\WTBS\DagorAssetExplorer\output\pzkpfw_35t.dyn")
-
-	# mdl.computeData()
-	# mdl.generateMaterials()
-	
-	# for m in mdl.materials:
-	# 	m.debug()
-	# mdl.exportSmd(0, "output")
-	# mdl.exportDmf(0, "test/out")
+	# mdls = [DynModel(fr"C:\Users\qhami\Documents\WTBS\DagorAssetExplorer\output\{f}") for f in os.listdir(r"C:\Users\qhami\Documents\WTBS\DagorAssetExplorer\output") if f != "mvd"]

@@ -16,7 +16,6 @@ from gui.progressDialog import ProgressDialog, BusyProgressDialog, MessageBox
 from gui.mapDialog import MapExportDialog
 from util.misc import openFile, getResPath, getUIPath
 from util.assetmanager import AssetManager
-from util.settings import SETTINGS
 from parse.gameres import GameResDesc
 from parse.realres import GeomNodeTree, DynModel, RendInst, CollisionGeom
 from parse.material import DDSx

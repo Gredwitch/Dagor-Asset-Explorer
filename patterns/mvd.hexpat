@@ -3,41 +3,33 @@
 #include <std/io.pat>
 
 fn abs(s32 a) {
-    if (a < 0)
-        return -a;
-    else
-        return a;
-    
+	if (a < 0)
+		return -a;
+	else
+		return a;
+	
 };
 
 namespace MVD {
 	struct Material {
-		padding[0x40];
-
-		u64 flags;
+		float diff[4];
+		float amb[4];
+		float emis[4];
+		float spec[4];
+		
+		u32 unknown;
+		u32 shaderNameOfs;
 
 		padding[8];
-
-		u32 diffuse;
-		u32 camo;
-		u32 bump;
-		u32 ao;
-		u32 mask;
-		u32 unknown1;
-		u32 unknown2;
-		u32 unknown3;
-		u32 unknown4;
-		u32 unknown5;
-		u32 unknown6;
-		u32 unknown7;
-		u32 unknown8;
-		u32 unknown9;
-		u32 unknownA;
-		u32 unknownB;
-
-		u64 flags2;
-		u64 flags3;
-		u64 flags4;
+		
+		u32 textures[16];
+		
+		u32 dataOfs;
+		u32 dataCnt;
+		
+		padding[8];
+		
+		u64 flags;
 	};
 
 	struct Header {
@@ -61,11 +53,12 @@ namespace MVD {
 		u16 bf_14;
 		u32 iCnt;
 		u32 storageFormat;
+
+		padding[8];
 	};
 
 	Header Hdr @ 0;
 
-	char matData[abs(Hdr.matOffset - 0x20)] @ sizeof(Hdr);
 	Material materials[Hdr.matCount] @ Hdr.matOffset;
 	VertexData vertexData[Hdr.lodCount] @ Hdr.lodOffset;
 }

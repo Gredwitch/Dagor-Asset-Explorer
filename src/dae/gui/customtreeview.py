@@ -68,10 +68,12 @@ class SimpleItem:
 		# if len(menu.children()) > 0:
 		# 	menu.addSeparator()
 		
-		menu.addSeparator()
-		
 		if isinstance(self, AssetItem):
 			asset = self.asset
+
+			menu.addAction(CopyNameToClipboard(menu, self))
+		
+			menu.addSeparator()
 
 			if isinstance(asset, Packed) and self.hasParent():
 				menu.addAction(Extract(menu, self))
@@ -322,6 +324,16 @@ class CopyPathToClipboard(CustomAction):
 	@property
 	def actionText(self) -> str:
 		return "Copy path to clipboard"
+
+class CopyNameToClipboard(CustomAction):
+	item:AssetItem
+
+	def run(self):
+		copyToClipboard(self.item.asset.name)
+	
+	@property
+	def actionText(self) -> str:
+		return "Copy name to clipboard"
 
 
 
