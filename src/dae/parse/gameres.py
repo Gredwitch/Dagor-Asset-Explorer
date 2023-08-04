@@ -95,23 +95,16 @@ class GameResDesc(FilePathable, Terminable):
 		except:
 			return False
 
-	def getModelMaterials(self, model:str) -> list[MaterialData]:
-		tex = self.getModelTextures(model)
-
-		if tex is None:
-			raise Exception
-
-		blk = self.__datablock.getByName(model)
-		matB = blk.getByName("matR")
+	def __exploreMaterialBlock(self, blk:DataBlock, blockName:str, tex:list[str], mats:list[MaterialData]):
+		matB = blk.getByName(blockName)
 
 		if matB is None:
-			matB = blk.getByName("mat")
-		
+			log.log(f"No such block '{blockName}', skipping")
 
-		# mats = []
-		mats:list[MaterialData] = []
+			return
 		
 		for matBlock in SafeIter(self, matB.getChildren()):
+			matBlock:DataBlock
 			mat = MaterialData()
 
 
@@ -136,9 +129,34 @@ class GameResDesc(FilePathable, Terminable):
 
 			mats.append(mat)
 
+	def __getModelMaterials(self, model:str, blockNames:tuple[str]):
+		tex = self.getModelTextures(model)
+
+		if tex is None:
+			raise Exception
+		
+		log.log(f"Pulling materials from GameResDesc for model {model}")
+		log.addLevel()
+
+		blk = self.__datablock.getByName(model)
+		
+		mats:list[MaterialData] = []
+
+		for name in SafeIter(self, blockNames):
+			self.__exploreMaterialBlock(blk, name, tex, mats)
+
 		computeMaterialNames(mats, self)
 
+		log.subLevel()
+
 		return mats
+
+	def getModelMaterials(self, model:str) -> list[MaterialData]:
+		return self.__getModelMaterials(model, ("matR", "mat"))
+
+	def getSkinnedMaterials(self, model:str):
+		return self.__getModelMaterials(model, ("matS", ))
+		
 
 class GameResourcePack(Pack): # may need cleanup / TODO: rewrite like DXP2
 	@classmethod

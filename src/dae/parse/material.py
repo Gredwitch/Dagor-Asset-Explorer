@@ -8,7 +8,6 @@ import util.log as log
 from util.fileread import *
 from util.terminable import Packed, Pack, SafeIter, SafeRange, SafeEnumerate, SafeReversed, Terminable
 from util.decompression import zstdDecompress, oodleDecompress, zlibDecompress, lzmaDecompress
-from parse.mesh import MatVData
 from util.enums import *
 from util.assetcacher import AssetCacher
 from pprint import pprint
@@ -996,30 +995,30 @@ def computeMaterialNames(mats:list[MaterialData], parent:Terminable = None):
 
 	log.subLevel()
 
-def generateMaterialData(textures:list[str], mvdMats:list[MatVData.Material], parent:Terminable = None):
-	materials:list[MaterialData] = []
+# def generateMaterialData(textures:list[str], mvdMats:list[MatVData.Material], parent:Terminable = None):
+# 	materials:list[MaterialData] = []
 
-	iterator = (lambda x: SafeEnumerate(parent, x)) if parent is not None else (lambda x: enumerate(x))
+# 	iterator = (lambda x: SafeEnumerate(parent, x)) if parent is not None else (lambda x: enumerate(x))
 
-	for k, v in iterator(mvdMats):
-		mat = MaterialData()
+# 	for k, v in iterator(mvdMats):
+# 		mat = MaterialData()
 
-		mat.cls = v.shaderClass
-		mat.par = ""
-		mat.diff = v.diff
-		mat.amb = v.amb
-		mat.spec = v.spec
-		mat.emis = v.emis
+# 		mat.cls = v.shaderClass
+# 		mat.par = ""
+# 		mat.diff = v.diff
+# 		mat.amb = v.amb
+# 		mat.spec = v.spec
+# 		mat.emis = v.emis
 		
-		for texId, texKey in iterator(v.textures):
-			if texKey == 0xFFFFFFFF:
-				continue
+# 		for texId, texKey in iterator(v.textures):
+# 			if texKey == 0xFFFFFFFF:
+# 				continue
 			
-			mat.addTexSlot(f"t{texId}", textures[texKey])
+# 			mat.addTexSlot(f"t{texId}", textures[texKey])
 
-		materials.append(mat)
+# 		materials.append(mat)
 	
-	return materials
+# 	return materials
 
 if __name__ == "__main__":
 	from gameres import GameResDesc

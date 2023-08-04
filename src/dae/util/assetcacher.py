@@ -70,7 +70,6 @@ class AssetCacher:
 			return False
 		
 		classCache:dict = cls.__cachedAssets[assetClass]
-
 		if not name in classCache:
 			return False
 		
@@ -136,5 +135,11 @@ class AssetCacher:
 		for desc in cls.__modelsDesc.values():
 			if desc.hasName(model):
 				return desc.getModelMaterials(model)
+
+	@classmethod
+	def getSkinnedMaterials(cls, model:str) -> list[str]:
+		for desc in cls.__modelsDesc.values():
+			if desc.hasName(model):
+				return desc.getSkinnedMaterials(model)
 	
 		return []

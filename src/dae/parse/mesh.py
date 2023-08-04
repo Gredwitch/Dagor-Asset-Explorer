@@ -9,6 +9,7 @@ from struct import unpack
 from util.fileread import *
 from util.terminable import SafeRange, Terminable, FilePathable, SafeIter, SafeEnumerate
 from util.enums import *
+from parse.material import MaterialData
 from abc import ABC, abstractmethod
 
 # from misc import pprint, loadDLL
@@ -95,6 +96,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				texCnt:int = 0, 
 				matCnt:int = 0, 
 				filePath:str = None,
+				textures:list[str] = None,
 				flag:int = MVD_NORMAL):
 		FilePathable.__init__(self, filePath, name, file.getSize())
 
@@ -102,6 +104,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		self.__matCnt = matCnt
 		self.__file = file
 		self.__flag = flag
+		self.__textures = textures
 
 		self.__dataComputed = False
 
@@ -134,6 +137,8 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 		matOfs = readInt(file)
 		matCnt = readInt(file)
+
+		self.__hasMaterials = matOfs != 0 and matCnt != 0 
 
 		file.seek(8, 1)
 
@@ -169,7 +174,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 			self.emis:tuple[float] = None # 16 elements
 
 
-	def __processMaterial__(self, mat:Material, ofs:int, idx:int):
+	def __processMaterial__(self, ofs:int, idx:int):
 		file = self.__file
 
 		file.seek(ofs + idx * 0xA8, 0)
@@ -190,7 +195,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		
 		file.seek(8, 1)
 
-		textureIDs = unpack("I" * 16, file.read(0x40))
+		textureIds = unpack("I" * 16, file.read(0x40))
 
 		dataOfs = readInt(file)
 		unknown2 = readInt(file)
@@ -215,25 +220,39 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 		shader = shader.decode("utf-8")
 
-		log.log(f"shader          = {shader}")
-
 		log.subLevel()
 
-		mat.shaderClass = shader
-		mat.textures = textureIDs
-		mat.data = BinBlock(file, dataOfs, 0xB0)
+		mat = MaterialData()
+		mat.cls = shader
+
+		# mat.data = BinBlock(file, dataOfs, 0xB0)
 		mat.diff = diff
 		mat.amb = amb
 		mat.spec = spec
 		mat.emis = emis
+		mat.par = ""
+
+		for slotId, texId in SafeEnumerate(self, textureIds):
+			if slotId > 10:
+				break
+
+			if texId == 0xFFFFFFFF:
+				continue
+
+			if self.__textures is None:
+				tex = str(texId)
+			else:
+				tex = self.__textures[texId]
+
+			mat.addTexSlot(f"t{slotId}", tex)
 
 		return mat
 
 	def __computeMaterials__(self, cnt:int, ofs:int):
 		log.log(f"Computing {cnt} materials @ {ofs}")
 		log.addLevel()
-
-		self.__materials = tuple(self.__processMaterial__(self.Material(), ofs, i) for i in SafeRange(self, cnt))
+		# skip if self.__textures is None?
+		self.__materials = tuple(self.__processMaterial__(ofs, i) for i in SafeRange(self, cnt))
 
 		log.subLevel()
 
@@ -298,6 +317,10 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 		
 		def getIndicesSz(self):
 			return self.__iSz
+
+		@property
+		def idx(self):
+			return self.__idx
 
 
 		@property
@@ -463,6 +486,9 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 					return self.next()
 
 				return (a,b,c)
+
+		def __repr__(self):
+			return f"<VertexData {self.__gvData.idx} vCnt={self.__gvData.getVertexCnt()}>"
 
 		def __init__(self, file:BinBlock, gvData):
 			self.__verts:tuple[tuple(float, float, float)] = None
@@ -785,6 +811,9 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 		log.log(f"Wrote {len(obj)} to {fileName}")
 
+	@property
+	def hasMaterials(self):
+		return self.__hasMaterials
 
 if __name__ == "__main__":
 	from util.decompression import CompressedData
