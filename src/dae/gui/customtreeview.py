@@ -6,7 +6,7 @@ sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 import util.log as log
 from PyQt5.QtWidgets import QAbstractItemView, QTreeView, QLineEdit, QHeaderView, QMenu, QAction, QStyledItemDelegate, QFileDialog, QMainWindow
 from PyQt5.QtCore import pyqtSignal, QMimeData, Qt, QSortFilterProxyModel, QPoint, QFileInfo
-from PyQt5.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QStandardItemModel, QStandardItem, QIcon
+from PyQt5.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QStandardItemModel, QStandardItem, QIcon, QPaintEvent, QPainter
 from util.misc import formatBytes, getResPath, openFile, ROOT_FOLDER, LIB_FOLDER
 from util.terminable import Exportable, Packed, Pack, Terminable
 from util.enums import *
@@ -992,6 +992,16 @@ class CustomTreeView(QTreeView):
 		self.mainWindow = None
 
 		self.customContextMenuRequested.connect(self.rightClickEvent)
+	
+	def paintEvent(self, event:QPaintEvent):
+		if self.model() and self.model().rowCount() > 0:
+			super().paintEvent(event)
+		else:
+			painter = QPainter(self.viewport())
+			text = "Drag and drop files here or open assets through the \"File\" menu"
+			textRect = painter.fontMetrics().boundingRect(text)
+			textRect.moveCenter(self.viewport().rect().center())
+			painter.drawText(textRect, Qt.AlignCenter, text)
 	
 	def rightClickEvent(self, pos:QPoint):
 		index = self.indexAt(pos)

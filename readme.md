@@ -20,6 +20,20 @@ DAE was designed to fulfil a few purposes:
 - Export map props easily
 - Streamline model export to the Source engine (implemented for demo purposes!)
 
+## Features
+
+TBD
+
+## How to use:
+
+If you do not know where the file you are looking for is located, just click *File -> Open asset folder...* and select the root directory of your game (E.g. `C:\...steamapps\common\War Thunder`). Then, just use the search bar to find the asset you are looking for.
+
+Otherwise, you should follow these steps:
+1. **Depending on the type of model you are looking for, open the according Game Res Desc: either `riDesc.bin` or `dynModelDesc.bin`**. If you are unsure, load both of them. In War Thunder, these files are located in `(gamedir)\content\base\res`.
+If you do not load these, it is likely that your models will not have material group names.
+2. **Load the GRP your model is located in**.
+3. (Optional) **Load the necessary DDSx Pack (dxp.bin) files**
+4. Find your model and export it to the format of your choice, although **it is heavily recommanded to export models as DMF**. Depending on your settings and the contents of the loaded DXPs, textures will be exported in the `textures` folder relative to your exported files.
 
 ## What's working:
 - Exporting most textures (I used [klensy's wt-tools](https://github.com/klensy/wt-tools) as a base and added DXT10 support)
