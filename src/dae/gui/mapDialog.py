@@ -22,7 +22,7 @@ from util.assetcacher import AssetCacher
 from struct import pack
 
 
-MAPUI_PATH = getUIPath("mapDialog.ui")
+MAPUI_PATH = getUIPath("mapWidget.ui")
 
 class CellButton(QPushButton):
 	selectedCount = 0
@@ -113,7 +113,7 @@ def getOutputDir():
 	
 	return output
 
-class MapExportDialog(QDialog):
+class MapTab(QWidget):
 	browse:QPushButton
 	lineEdit:QLineEdit
 	exportButton:QPushButton
@@ -126,8 +126,8 @@ class MapExportDialog(QDialog):
 
 	gridLayout:QGridLayout
 	
-	def __init__(self, parent:QWidget):
-		super().__init__(parent)
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
 		
 		loadUi(MAPUI_PATH, self)
 		
@@ -142,10 +142,10 @@ class MapExportDialog(QDialog):
 		self.map:DagorBinaryLevelData = None
 		self.cellData:list = None
 
-		self.exportButton.clicked.connect(self.export)
+		self.exportButton.clicked.connect(self.exportAction)
 		self.cellsToExport = set()
 
-		self.mainWindow = parent
+		self.mainWindow:QWidget = None
 	
 	def buttonDropEvent(self, event:QDropEvent):
 		path:str = self.getEventPath(event.mimeData())
@@ -255,7 +255,7 @@ class MapExportDialog(QDialog):
 			# f"Total entity count: {totalVegCnt}",
 		)))
 
-	def __getEntities(self):
+	def getEntities(self):
 		entities = {}
 
 		riGen = self.map.riGenLayers[0]
@@ -269,7 +269,7 @@ class MapExportDialog(QDialog):
 
 		return entities
 
-	def __exportAssets(self, output:str, entities:dict[str, list]):
+	def exportAssets(self, output:str, entities:dict[str, list]):
 		outpath = makeOutputFolder(output, True, self.map.name + "_props")
 
 		log.log(f"Exporting {len(entities)} assets to {outpath}")
@@ -304,7 +304,7 @@ class MapExportDialog(QDialog):
 
 		log.subLevel()
 
-	def __writeToFile(self, output:str, entities:dict[str, list]):
+	def writeToFile(self, output:str, entities:dict[str, list]):
 		filepath = path.join(output, self.map.name + ".dpl")
 
 		log.log(f"Writing {len(entities)} entities into {self.map.name + '.dpl'}")
@@ -337,7 +337,7 @@ class MapExportDialog(QDialog):
 		file.write(value)
 		file.close()
 
-	def export(self):
+	def exportAction(self):
 		if self.map is None or len(self.cellsToExport) == 0:
 			return
 		
@@ -346,11 +346,7 @@ class MapExportDialog(QDialog):
 		if output is None:
 			return
 
-		entities = self.__getEntities()
-		self.__writeToFile(output, entities)
-		
-		if self.exportAssets.isChecked():
-			self.__exportAssets(output, entities)
+		self.mainWindow.exportMap(output)
 		
 
 
@@ -359,6 +355,6 @@ if __name__ == "__main__":
 
 	app = QApplication([])
 
-	widget = MapExportDialog(None)
+	widget = MapTab(None)
 	widget.show()
 	app.exec_()

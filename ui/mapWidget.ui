@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>Dialog</class>
- <widget class="QDialog" name="Dialog">
-  <property name="geometry">
+ <class>Form</class>
+ <widget class="QWidget" name="Form">
+ <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
@@ -192,7 +192,7 @@
     </layout>
    </item>
   </layout>
- </widget>
+  </widget>
  <resources/>
  <connections/>
 </ui>

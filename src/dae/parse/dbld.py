@@ -8,12 +8,11 @@ sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 from util.fileread import *
 from util.decompression import CompressedData, zlibDecompress, zstdCompress, compressBlock
 # from math import * #acos, degrees
-from util.terminable import Exportable
+from util.terminable import Exportable, Terminable, SafeRange
 from struct import unpack, pack
 from util.enums import *
 
 import util.log as log
-# from terminable import Exportable
 from parse.mesh import MatVData, ShaderMesh
 from parse.material import DDSx, MaterialData
 from parse.datablock import loadDataBlock
@@ -136,7 +135,7 @@ class DagorBinaryLevelData(Exportable):
 			# log.log(f"BlockHeader {idx}: {formatMagic(self.name)}\t{' '.join(tuple(hex(self.data[i])[2:].upper() for i in range(20)))}")
 	
 
-	class RendInstGenData:
+	class RendInstGenData(Terminable):
 		class PregEntCounter:
 			structSize = 8
 
@@ -571,7 +570,7 @@ class DagorBinaryLevelData(Exportable):
 
 			szAdd = self.perInstDataDwords * 4
 			
-			for i in range(65):
+			for i in SafeRange(self, 65):
 				j = i + 1
 
 				entCnterIdx = cell.entCnt[i]
@@ -586,6 +585,9 @@ class DagorBinaryLevelData(Exportable):
 					log.addLevel()
 
 					while True:
+						if self.shouldTerminate:
+							break
+
 						entCnter = self.entCnt[entCnterIdx]
 						riIdx = ((entCnter.raw >> 20) & 0xC00) | (entCnter.raw & 0x3FF) # hack
 
@@ -601,7 +603,7 @@ class DagorBinaryLevelData(Exportable):
 						# v49 = 3 * riIdx
 
 						if ent.posInst == 0:
-							for _ in range(entCnter.riCount):
+							for _ in SafeRange(self, entCnter.riCount):
 								if enlisted:
 									loadedData = riData.read(48 + szAdd)
 									array = tuple(unpack("h", loadedData[2 + (i * 4):4 + (i * 4)])[0] for i in range(12))
@@ -628,7 +630,7 @@ class DagorBinaryLevelData(Exportable):
 
 									# seek to (entCnter.riCount * (24 + szAdd)) - (entCnter.riCount - (2 * v49))
 						else:
-							for _ in range(entCnter.riCount):
+							for _ in SafeRange(self, entCnter.riCount):
 								loadedData = riData.read(8 + szAdd)
 								vegCnt += 1
 

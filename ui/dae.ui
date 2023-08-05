@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>958</width>
-    <height>645</height>
+    <width>912</width>
+    <height>827</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -25,20 +25,39 @@
    </property>
    <layout class="QGridLayout" name="gridLayout">
     <item row="0" column="0">
-     <widget class="QLineEdit" name="lineEdit">
-      <property name="text">
-       <string/>
+     <widget class="QTabWidget" name="tabWidget">
+      <property name="currentIndex">
+       <number>0</number>
       </property>
-      <property name="placeholderText">
-       <string>Search...</string>
-      </property>
-     </widget>
-    </item>
-    <item row="1" column="0">
-     <widget class="CustomTreeView" name="treeView">
-      <property name="dragDropMode">
-       <enum>QAbstractItemView::DropOnly</enum>
-      </property>
+      <widget class="QWidget" name="tab">
+       <attribute name="title">
+        <string>Asset tree</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout">
+        <item>
+         <widget class="QLineEdit" name="lineEdit">
+          <property name="text">
+           <string/>
+          </property>
+          <property name="placeholderText">
+           <string>Search...</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="CustomTreeView" name="treeView">
+          <property name="dragDropMode">
+           <enum>QAbstractItemView::DropOnly</enum>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="MapTab" name="mapTab">
+       <attribute name="title">
+        <string>Map prop layout exporter</string>
+       </attribute>
+      </widget>
      </widget>
     </item>
    </layout>
@@ -48,7 +67,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>958</width>
+     <width>912</width>
      <height>26</height>
     </rect>
    </property>
@@ -58,7 +77,6 @@
     </property>
     <addaction name="actionOpenFolder"/>
     <addaction name="actionOpenFiles"/>
-    <addaction name="actionOpenMap"/>
     <addaction name="separator"/>
     <addaction name="actionUnmount"/>
     <addaction name="separator"/>
@@ -139,6 +157,12 @@
    <class>CustomTreeView</class>
    <extends>QTreeView</extends>
    <header>gui.customtreeview</header>
+  </customwidget>
+  <customwidget>
+   <class>MapTab</class>
+   <extends>QWidget</extends>
+   <header>gui.mapDialog</header>
+   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources/>

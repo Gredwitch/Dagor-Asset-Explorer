@@ -34,7 +34,6 @@ Models can be exported to OBJ without skeleton. An MTL file is automaticaly gene
 
 
 ## What's not working:
-- DynModels skinned meshes are not exported
 - Collision models are offset
 
 ## Map prop export demo

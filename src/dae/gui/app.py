@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import QMainWindow, QGridLayout, QAction, QFileDialog, QApp
 from PyQt5.QtGui import QIcon, QStandardItem
 from gui.customtreeview import CustomTreeView, AssetItem, FolderItem
 from gui.progressDialog import ProgressDialog, BusyProgressDialog, MessageBox
-from gui.mapDialog import MapExportDialog
+from gui.mapDialog import MapTab
 from util.misc import openFile, getResPath, getUIPath
 from util.assetmanager import AssetManager
 from parse.gameres import GameResDesc
@@ -82,7 +82,9 @@ class MainWindow(QMainWindow):
 	actionUnmount:QAction
 	actionClose:QAction
 	actionSettings:QAction
-	actionOpenMap:QAction
+	# actionOpenMap:QAction
+
+	mapTab:MapTab
 
 	def __init__(self):
 		super().__init__()
@@ -98,7 +100,7 @@ class MainWindow(QMainWindow):
 		self.actionClose.triggered.connect(self.close)
 		self.actionOpenFolder.triggered.connect(self.openFolder)
 		self.actionOpenFiles.triggered.connect(self.openAssets)
-		self.actionOpenMap.triggered.connect(self.openMap)
+		# self.actionOpenMap.triggered.connect(self.openMap)
 		self.actionUnmount.triggered.connect(self.unmountAssets)
 		self.actionSettings.triggered.connect(self.openSettings)
 
@@ -110,14 +112,9 @@ class MainWindow(QMainWindow):
 
 		self.cachedIcons:dict[str:QIcon] = {}
 
-		self.__openMapDialog:MapExportDialog = None
+		self.mapTab.mainWindow = self
 		
 		self.show()
-	
-	def openMap(self):
-		dialog = MapExportDialog(self)
-		self.__openMapDialog = dialog
-		dialog.exec_()
 
 	def openSettings(self):
 		settings = SettingsDialog(self)
@@ -180,11 +177,14 @@ class MainWindow(QMainWindow):
 
 		self.threadPool.start(thread)
 	
-	def __mapLoadFinished(self, map:DagorBinaryLevelData, cellData:list):
-		if self.__openMapDialog is None:
-			return
+	def exportMap(self, path:str):
+		thread = MapExportThread(self, path)
+		thread.setAutoDelete(True)
 
-		self.__openMapDialog.mapLoadFinished(map, cellData)
+		self.threadPool.start(thread)
+	
+	def __mapLoadFinished(self, map:DagorBinaryLevelData, cellData:list):
+		self.mapTab.mapLoadFinished(map, cellData)
 	
 	def mountAssets(self, paths:list[str]):
 		# self.activeThread = QRunnable(partial(self.__mountAssetsInternal__, paths))
@@ -398,6 +398,61 @@ class MapLoadThread(QRunnable):
 								nonVegCnt,
 								vegCnt,
 								len(entities)))
+			
+			self.sig.finished.emit()
+		except Exception as e:
+			print(format_exc())
+
+			log.subLevel(log.curLevel)
+
+			mainWindow.setRequestedDialog(DIALOG_ERROR)
+
+		mainWindow.clearTerminable()
+
+		mainWindow.setRequestedDialog(DIALOG_NONE)
+
+class MapExportThread(QRunnable):
+	class Signals(QObject):
+		finished = pyqtSignal()
+
+		def __init__(self, *args, **kwargs):
+			super().__init__(*args, **kwargs)
+		
+	
+	def __init__(self, mainWindow:MainWindow, path:str):
+		super().__init__()
+
+		self.sig = MapLoadThread.Signals()
+		
+		self.path = path
+		self.mainWindow = mainWindow
+	
+	def run(self):
+		mainWindow = self.mainWindow
+		output = self.path
+		mapTab = mainWindow.mapTab
+		
+		mainWindow.setRequestedDialog(DIALOG_STATUS)
+		
+		mainWindow.setTaskTitle("Loading map...")
+		mainWindow.setTaskStatus("Loading map data...")
+
+		try:
+			mainWindow.setTaskStatus("Loading cell entities")
+			mainWindow.setTaskProgress(0/3)
+			mainWindow.setTerminable(mapTab.map.riGenLayers[0])
+			entities = mapTab.getEntities()
+			mainWindow.clearTerminable()
+			mainWindow.setTaskProgress(1/3)
+			mainWindow.setTaskStatus("Writing DPL")
+			mapTab.writeToFile(output, entities)
+			mainWindow.setTaskProgress(2/3)
+			
+			if mapTab.exportAssets.isChecked():
+				mainWindow.setTaskStatus("Exporting assets")
+				mapTab.exportAssets(output, entities)
+			
+			mainWindow.setTaskProgress(1.0)
 			
 			self.sig.finished.emit()
 		except Exception as e:
