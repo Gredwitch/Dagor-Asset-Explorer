@@ -554,7 +554,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				file.seek(self.sz, 1)
 
 
-		__FORMATS:dict[int, dict[int, tuple[PARSECLASS]]] = {
+		FORMATS:dict[int, dict[int, tuple[PARSECLASS]]] = {
 			1:{
 				12:(FLOAT_VERTEX(), NO_UV())
 			  },
@@ -564,16 +564,18 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 			  },
 			3:{
 				16:(SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+				20:(FLOAT_VERTEX(), PADDING(4), SHORT_UV()),
 				24:(FLOAT_VERTEX(), PADDING(4), FLOAT_UV()),
 			  },
 			4:{
 				20:(PADDING(4), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
-				# 24:(),
+				# 24: # tree_02_dstr (wt)
 				28:(FLOAT_VERTEX(), PADDING(4), FLOAT_UV(), PADDING(4)),
 			  },
 			5:{
 				24:(SHORT_UV(), SHORT_VERTEX(), PADDING(14)),
 				28:(FLOAT_VERTEX(), PADDING(12), SHORT_UV()),
+				36:(FLOAT_VERTEX(), PADDING(4), FLOAT_UV(), PADDING(12))
 			  },
 			6:{
 				32:(FLOAT_VERTEX(), PADDING(4), SHORT_UV(), PADDING(12)) # UVs?
@@ -583,10 +585,14 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				16:(SHORT_VERTEX(), PADDING(6), SHORT_UV()),
 			  },
 			15:{
-				24:(PADDING(8), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+				# 24:(PADDING(8), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+			 	28:(FLOAT_VERTEX(), PADDING(8), SHORT_UV(), PADDING(4)),
+				32:(FLOAT_VERTEX(), PADDING(20), NO_UV())
 			  },
 			16:{
 				28:(PADDING(12), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+			 	32:(PADDING(4), FLOAT_VERTEX(), PADDING(4), SHORT_UV(), PADDING(8)),
+				36:(FLOAT_VERTEX(), PADDING(14), SHORT_UV(), PADDING(6))
 			  },
 			17:{
 				32:(NO_UV(), PADDING(8), SHORT_VERTEX(), PADDING(18)),
@@ -594,12 +600,20 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 			  },
 			25:{
 				24:(SHORT_VERTEX(), PADDING(6), SHORT_UV(), PADDING(8)),
+				28:(FLOAT_VERTEX(), PADDING(4), SHORT_UV(), PADDING(8)),
+				32:(FLOAT_VERTEX(), PADDING(4), FLOAT_UV(), PADDING(8))
 			  },
+			26:{
+				32:(PADDING(4), FLOAT_VERTEX(), PADDING(4), SHORT_UV(), PADDING(8))
+			},
+			27:{
+				36:(FLOAT_VERTEX(), PADDING(4), SHORT_UV(), PADDING(16))
+			},
 		}
 
 		def getParser(self, format:int, vStride:int):
-			if format in self.__FORMATS:
-				return self.__FORMATS[format].get(vStride)
+			if format in self.FORMATS:
+				return self.FORMATS[format].get(vStride)
 			else:
 				return None
 
@@ -772,6 +786,9 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 			ofs += gvData.getFullVertexDataSz()
 
 		return ofs
+	
+	def getGlobalVertexData(self, idx):
+		return self.__gvdata[idx]
 
 	def getVertexData(self, idx:int):
 		if not self.__dataComputed:
@@ -796,11 +813,15 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 
 		return self.VertexData(file.readBlock(sz), gvData)
 
-	def quickExportVDataToObj(self, idx:int):
+	def quickExportVDataToObj(self, idx:int, suffix:str = "", outdir:str = None):
 		log.log(f"Quick exporting {idx} as OBJ")
 		log.addLevel()
 
-		fileName = f"{self.name}_{idx}.obj"
+		fileName = f"{self.name}_{idx}{suffix}.obj"
+
+		if outdir is not None:
+			fileName = path.join(outdir, fileName)
+
 		obj = self.getVertexData(idx).getObj()
 
 		file = open(fileName, "w")
