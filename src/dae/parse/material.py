@@ -3,7 +3,6 @@ from os import path, getcwd, mkdir, makedirs
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
-import PIL
 import util.log as log
 from util.fileread import *
 from util.terminable import Packed, Pack, SafeIter, SafeRange, SafeEnumerate, SafeReversed, Terminable
@@ -14,6 +13,8 @@ from pprint import pprint
 from struct import pack_into as packInto
 from struct import pack
 from ctypes import create_string_buffer
+from PIL import Image
+from PIL.ImageChops import invert
 
 DDSX_HEADER_SIZE = 0x20
 
@@ -502,9 +503,18 @@ class TexturePathDict:
 			self.__texType = texType
 			self.__texPath = texPath
 
+			if texType == TEXTURE_MASKED:
+				self.__newName:str = self.tex + "m"
+			else:
+				self.__newName:str = None
+
 		def setType(self, texType:int):
 			self.__texType = texType
 
+		@property
+		def newName(self):
+			return self.__newName
+		
 		@property
 		def tex(self):
 			return self.__tex
@@ -546,6 +556,10 @@ class TexturePathDict:
 		texName = MaterialData.getTexFileName(texName)
 		texPath = self.getTexPath(texName)
 		tex = TexturePathDict.Texture(texName, texType, texPath)
+
+		if tex.newName:
+			texName = tex.newName
+
 		vmt.append(f'${vmtKey} "{texPath}/{texName}"')
 		
 		self.__d[texName] = tex
@@ -622,6 +636,13 @@ class MaterialData(Terminable):
 
 		return "_".join(components)
 
+	def checkModifiedName(self, tex:str, texturePaths:TexturePathDict):
+		if texturePaths is None or texturePaths.get(tex + "m") is None:
+			return tex
+		else:
+			return tex + "m"
+		
+
 	@classmethod
 	def getTexFileName(cls, tex:str):
 		return tex.split("*")[0]
@@ -667,7 +688,41 @@ class MaterialData(Terminable):
 	def getTextureSlots(self):
 		return self.__textureSlots
 
-	def exportTexture(self, texture:str, output:str = getcwd()):
+	def convertTex(self, texture:str, data:bytes, texturePaths:TexturePathDict = None, forceConvert:bool = False, texN:str = None):
+		newName = None
+
+		if texturePaths is not None and texturePaths.get(texture if texN is None else texN) is not None:
+			tex = texturePaths.get(texture if texN is None else texN)
+
+			texType = tex.texType
+
+			if tex.newName is not None:
+				newName = tex.newName
+		else:
+			texType = None
+		
+		if texType is not None or forceConvert:
+			img = Image.open(BytesIO(data))
+
+			if texType is not None and texType != TEXTURE_GENERIC:
+				r, g, b, a = img.split()
+				img.close()
+
+				if texType == TEXTURE_MASKED:
+					img = Image.merge("RGBA", (r, g, b, invert(a)))
+				elif texType == TEXTURE_NORMAL:
+					whiteChannel = Image.new("L", img.size, 255)
+					img = Image.merge("RGBA", (a, g, whiteChannel, r))
+			
+			outBin = BytesIO()
+			img.save(outBin, format = "DDS")
+			data = outBin.getvalue()
+			outBin.close()
+			img.close()
+		
+		return data, newName
+	
+	def exportTexture(self, texture:str, output:str = getcwd(), forceConvert:bool = False, texturePaths:TexturePathDict = None, texN:str = None):
 		outpath = path.join(output, "textures")
 
 		if not path.exists(outpath):
@@ -684,13 +739,15 @@ class MaterialData(Terminable):
 			return
 		
 		data = getBestTex(self, ddsx).getDDS()
+		data, texN = self.convertTex(texture, data, texturePaths, forceConvert, texN)
+
+		if texN is not None:
+			name = texN
 
 		output = path.join(outpath, f"{name}.dds")
 
 		file = open(output, "wb")
-
 		file.write(data)
-
 		file.close()
 
 		log.log(f"Wrote {len(data)} bytes to {output}")
@@ -758,20 +815,22 @@ class MaterialData(Terminable):
 		if self.__detailList is None:
 			detailList = []
 			detailNormalList = []
-			detailStart = 4
 
-			if not self.isDynamic() or self.isLayered():
-				detailStart = 3
-			
-			for i in range(detailStart, len(self.__textureSlots), 2):
-				tex = self.__textureSlots[i]
+			if self.cls != "dynamic_painted_by_mask":
+				detailStart = 4
 
-				if tex is not None:
-					detailList.append(tex)
+				if not self.isDynamic() or self.isLayered():
+					detailStart = 3
+				
+				for i in range(detailStart, len(self.__textureSlots), 2):
+					tex = self.__textureSlots[i]
 
-					tex = self.__textureSlots[i + 1]
+					if tex is not None:
+						detailList.append(tex)
 
-					detailNormalList.append(tex)
+						tex = self.__textureSlots[i + 1]
+
+						detailNormalList.append(tex)
 			
 			self.__detailNormalList = detailNormalList
 			self.__detailList = detailList
@@ -807,14 +866,18 @@ class MaterialData(Terminable):
 
 	
 	def getVMT(self, texturePaths:TexturePathDict):
-		
 		params = self.getParams()
 		getScale = lambda x: 1 / float(params.get(x)) if x in params else 1
 
 		vmt = self.getVMTcomments()
 
 		if self.diffuse is not None:
-			diffuse = texturePaths.append(self.diffuse, TEXTURE_GENERIC, vmt, "basetexture")
+			texType = TEXTURE_GENERIC
+			
+			if self.cls.find("masked") != -1:
+				texType = TEXTURE_MASKED
+			
+			diffuse = texturePaths.append(self.diffuse, texType, vmt, "basetexture")
 
 			if self.detail1IsDiffuse():
 				vmt.append(f"$basetexturetransform center .5 .5 scale {getScale('detail1_tile_u')} {getScale('detail1_tile_v')} rotate 0 translate 0 0")
@@ -837,11 +900,7 @@ class MaterialData(Terminable):
 		else:
 			tileParam = "mask"
 
-
 		if mask is not None:
-			if diffuse is not None:
-				diffuse.setType(TEXTURE_MASKED)
-			
 			texturePaths.append(mask, TEXTURE_GENERIC, vmt, "detail")
 
 			vmt.append("$detailblendmode 4")
@@ -864,7 +923,7 @@ class MaterialData(Terminable):
 		if self.cls.find("glass") != -1:
 			vmt.append("$translucent 1")
 			vmt.append("$nocull 1")
-		elif "atest" in params and params["atest"] != "128":
+		elif ("atest" in params and params["atest"] != "128") or self.cls.find("atest") != -1:
 			vmt.append("$alphatest 1")
 			vmt.append("$nocull 1")
 		elif "two_sided" in params:
@@ -924,18 +983,18 @@ class MaterialTemplateLibrary(Terminable):
 
 			return formatted
 
-		def __exportDiffuse__(self, outpath:str):
-			self.material.exportTexture(self.material.diffuse, outpath)
+		def __exportDiffuse__(self, outpath:str, forceConvert:bool):
+			self.material.exportTexture(self.material.diffuse, outpath, forceConvert = forceConvert)
 		
-		def __exportNormal__(self, outpath:str):
-			self.material.exportTexture(self.material.normal, outpath)
+		def __exportNormal__(self, outpath:str, forceConvert:bool):
+			self.material.exportTexture(self.material.normal, outpath, forceConvert = forceConvert)
 
-		def exportTextures(self, outpath:str = getcwd()):
+		def exportTextures(self, outpath:str = getcwd(), forceConvert:bool = False):
 			if "map_Kd" in self.params:
-				self.__exportDiffuse__(outpath)
+				self.__exportDiffuse__(outpath, forceConvert)
 			
 			if "map_bump" in self.params:
-				self.__exportNormal__(outpath)
+				self.__exportNormal__(outpath, forceConvert)
 			
 
 	def __init__(self, materials:list[MaterialData]):
@@ -949,7 +1008,7 @@ class MaterialTemplateLibrary(Terminable):
 
 		return mtl
 	
-	def exportTextures(self, outpath:str = getcwd()):
+	def exportTextures(self, outpath:str = getcwd(), forceConvert:bool = False):
 		log.log("Exporting MTL textures")
 		log.addLevel()
 
@@ -959,7 +1018,7 @@ class MaterialTemplateLibrary(Terminable):
 			log.log(f"Exporting textures from {mat.material.getName()}")
 			log.addLevel()
 
-			mat.exportTextures(outpath)
+			mat.exportTextures(outpath, forceConvert)
 
 			log.subLevel()
 		

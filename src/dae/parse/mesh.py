@@ -439,27 +439,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				d = (decoded >> 2) ^ -((decoded & 2) != 0) # stolen from gaijin
 				index = self.buffer[current] + d
 
-				# print(self.count, d, index, self.buffer)
-
-				# self.count += 1
-
-				# if self.count < 135829 and not self.fucking:
-				#	 self.fucking = True
-
-				#	 while self.count < 135829:
-				#		 self.getIndex()
-
-				#	 return self.getIndex()
-				# elif self.count >= 135829:
-					# print(self.count, index, self.buffer, current == 1)
-
-					# self.offset = self.size
-
-
 				self.buffer[current] = index
-
-
-
 
 				return index
 
@@ -485,7 +465,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				if c == None:
 					return self.next()
 
-				return (a,b,c)
+				return (a, c, b) # reversed order somehow fixes normals???
 
 		def __repr__(self):
 			return f"<VertexData {self.__gvData.idx} vCnt={self.__gvData.getVertexCnt()}>"
@@ -545,7 +525,13 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				uv = unpack("ff", file.read(8))
 
 				return (uv[0], -uv[1])
+		
+		class HALFFLOAT_UV(UV):
+			def read(self, file:BinFile):
+				uv = unpack("ee", file.read(4))
 
+				return (uv[0], -uv[1])
+		
 		class PADDING(PARSECLASS):
 			def __init__(self, sz:int):
 				self.sz = sz
@@ -585,7 +571,7 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				16:(SHORT_VERTEX(), PADDING(6), SHORT_UV()),
 			  },
 			15:{
-				# 24:(PADDING(8), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
+				24:(PADDING(8), SHORT_VERTEX(), PADDING(6), SHORT_UV()),
 			 	28:(FLOAT_VERTEX(), PADDING(8), SHORT_UV(), PADDING(4)),
 				32:(FLOAT_VERTEX(), PADDING(20), NO_UV())
 			  },
@@ -622,8 +608,8 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 			vStride = self.__gvData.getVertexStride()
 			vCnt = self.__gvData.getVertexCnt()
 
-			verts:list[list[float, float, float]] = []
-			UVs:list[list[float, float]] = []
+			verts:list[list[float, float, float]] = [None] * vCnt
+			UVs:list[list[float, float]] = [None] * vCnt
 
 			parser = self.getParser(format, vStride)
 
@@ -632,16 +618,16 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 			else:
 				log.log(f"Processing {vCnt} vertices vFormat={format} vStride={vStride}")
 
-				for _ in SafeRange(self, vCnt):
+				for i in SafeRange(self, vCnt):
 					for parseClass in SafeIter(self, parser):
 						parseClass:MatVData.VertexData.PARSECLASS
 
 						if isinstance(parseClass, MatVData.VertexData.PADDING):
 							parseClass.read(file)
 						elif isinstance(parseClass, MatVData.VertexData.VERTEX):
-							verts.append(parseClass.read(file))
+							verts[i] = parseClass.read(file)
 						elif isinstance(parseClass, MatVData.VertexData.UV):
-							UVs.append(parseClass.read(file))
+							UVs[i] = parseClass.read(file)
 
 			self.__verts = verts
 			self.__UVs = UVs
@@ -671,38 +657,9 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 				log.log("Processing packed faces")
 
 				file.seek(1, 1)
-
-				# encodedSize = psize - 0x5
-				# faces = tuple(f for f in self.indexBuffer(file.read(encodedSize), encodedSize, self))
-
-				# meshopt = loadDLL("gdae_native.dll")
-				meshopt = None
-
-				if meshopt == None:
-					# log.log("Failed to load gdae_native.dll: some faces may be fucked", 1)
-
-					encodedSize = pSz - 0x5
-					faces = tuple(f for f in self.__decodeIndexSequence__(file.read(encodedSize), encodedSize, self))
-				else:
-					...
-					"""
-					# file.seek(1, 1)
-
-					dat = file.read(pSz)
-
-					indexCount = sz // 2
-					destination = create_string_buffer(sz * 2)
-
-					if meshopt.meshopt_decodeIndexSequence(destination, indexCount, sz, dat, sz) != -3:
-						raise Exception("Meshopt error")
-
-					f = open("faces.dat","wb")
-					f.write(destination.raw)
-					f.close()
-
-					faces = tuple(
-						unpack("<III", destination.raw[i * 12:(i + 1) * 12]) for i in range(indexCount // 3)
-					)"""
+				
+				encodedSize = pSz - 0x5
+				faces = tuple(f for f in self.__decodeIndexSequence__(file.read(encodedSize), encodedSize, self))
 
 			log.log(f"Processed {len(faces)} faces")
 			log.subLevel()

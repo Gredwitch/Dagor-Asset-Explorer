@@ -72,15 +72,37 @@ PHYSMAT_TO_SURFACEPROP = {
 	"transparentCamera":"default"
 }
 
+TINY_TRIANGLE_SMD = "\n".join((
+	"version 1",
+	
+	"nodes",
+	"0 \"_ROOT\" -1",
+	"end",
+
+	"skeleton",
+	"time 0",
+	"0 0.0000 0.0000 0.0000 -0.0000 0.0000 0.0000",
+	"end",
+	
+	"triangles",
+	"tinytriangle",
+	"0 0.00 0.00 0.00 0.0 0.0 1.0 1.0 0.0",
+	"0 0.01 0.00 0.00 0.0 0.0 1.0 0.0 0.5",
+	"0 0.00 0.01 0.00 0.0 0.0 1.0 1.0 0.0",
+	"end"
+))
+
 UNKNOWN_ICO_PATH = getResPath("unknown.bmp")
 REALRES_CLASSES_LIST:list[type] = None
 REALRES_CLASSES_DICT:dict[int, type] = None
+
+SOURCE_UNITS_METERS = 1.905
 
 VERTEX_SCALE = 40
 MAX_SOURCE_VERTS = 11000
 MAX_SOURCE_BONES = 128
 
-DMF_MAGIC = b"DMF\x01"
+DMF_MAGIC = b"DMF\x02"
 DMF_VDATA_OFS = 0x10
 DMF_MAT_PTR = 0x8
 DMF_SKE_PTR = 0xC
@@ -96,6 +118,14 @@ def crossProduct(v1, v2):
 
 def getNormal(v1, v2, v3):
 	return crossProduct(subVert(v2, v1), subVert(v3, v1))
+
+def normalize(normal):
+	length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2])
+	
+	if length != 0.0:
+		normal[0] /= length
+		normal[1] /= length
+		normal[2] /= length
 
 class SkinnedMesh(Terminable):
 	skinNodes:tuple[int]
@@ -255,8 +285,9 @@ class SMD(Terminable):
 		def formatTuple(self, array:tuple[float]):
 			return " ".join(tuple(f"{v:.6f}" for v in array))
 	
-	def __init__(self, name:str):
+	def __init__(self, name:str, baseName:str):
 		self.__name = name
+		self.__baseName = baseName
 		self.__triangles:list[SMD.Triangle] = []
 		self.__boneIdx = 0
 		self.__weight = 1
@@ -266,6 +297,10 @@ class SMD(Terminable):
 			tri:SMD.Triangle
 
 			tri.transform(matrix)
+	
+	@property
+	def baseName(self):
+		return self.__baseName
 	
 	@property
 	def name(self):
@@ -292,26 +327,48 @@ class SMD(Terminable):
 		))
 
 class SourceModel(Terminable):
-	def __init__(self, name:str, model, collision = None):
+	def __init__(self, name:str, model, collision = None, allLODs:tuple = None):
 		self.__name = name
 		self.__model:Model = model
+		self.__allLODs:tuple[Model] = allLODs
 		self.__collision:CollisionGeom = collision
 	
-	def getQC(self, customPath:str, smdNames:list[str]):
+	def getQC(self, customPath:str, smdNames:dict[str, list[str]], lodSmdNames:list[tuple[float, dict[str, list[str]]]] = []):
 		lines = [
 			"$upaxis Y",
 			"$origin 0 0 0 -90",
-			# "$scale 40",
-			# "$opaque",
+			# "$scale -1",
+			"$opaque",
 			f'$modelname "{customPath}/{self.name}.mdl"'
 		]
 		
 		lines.append(f'$cdmaterials "{self.getCdMaterials(customPath)}"')
-		
-		for smdName in SafeIter(self, smdNames):
-			lines.append(f'$body studio "{smdName}.smd"')
 
-		lines.append(f'$sequence "idle" "{smdNames[0]}.smd" loop')
+		lodLines:list[str] = [[f'$lod "{l[0] / SOURCE_UNITS_METERS}"', "{"] for l in SafeIter(self, lodSmdNames)]
+
+		for smdBaseName in SafeIter(self, smdNames):
+			for k, smdName in SafeEnumerate(self, smdNames[smdBaseName]):
+				lines.append(f'$body studio "{smdName}.smd"')
+
+				for lodIdx, lodData in SafeEnumerate(self, lodSmdNames):
+					lodIdx:int
+					lodDict:dict[str, list[str]] = lodData[1]
+					curLodLines = lodLines[lodIdx]
+
+					if not smdBaseName in lodDict or k >= len(lodDict[smdBaseName]):
+						curLodLines.append(f'\treplacemodel "{smdName}.smd" "tinytriangle.smd"')
+					else:
+						curLodLines.append(f'\treplacemodel "{smdName}.smd" "{lodDict[smdBaseName][k]}.smd"')
+
+		for k, v in SafeEnumerate(self, lodLines):
+			v.append("}")
+
+			lodLines[k] = "\n".join(v)
+		
+		lodLines:list[str]
+
+
+		lines.append('$sequence "idle" "anims/idle.smd" loop')
 
 
 		if self.__collision is not None:
@@ -327,17 +384,18 @@ class SourceModel(Terminable):
 			surfaceProp = "default"
 		
 		lines.append(f'$surfaceprop "{surfaceProp}"')
+		lines.append("\n".join(lodLines))
 
 		return "\n".join(lines)
 
-	def writeQC(self, outpath:str, customPath:str, smdNames:list[str]):
+	def writeQC(self, outpath:str, customPath:str, smdNames:dict[str, list[str]], lodSmdNames:list[tuple[float, dict[str, list[str]]]] = []):
 		filename = self.name + ".qc"
 		filepath = path.join(outpath, filename)
 
 		log.log(f"Generating {filename}")
 		log.addLevel()
 
-		qc = self.getQC(customPath, smdNames)
+		qc = self.getQC(customPath, smdNames, lodSmdNames)
 
 		self.__writeFile__(filepath, qc)
 
@@ -352,54 +410,29 @@ class SourceModel(Terminable):
 
 		log.log(f"Wrote {len(data)} bytes to {filepath}")
 
-	def writeSMDs(self, outpath:str):
-		self.setSubTask(self.__model)
-		SMDs = self.__model.getSMD()
-		smdNames:tuple[str] = tuple(smd.name for smd in SafeIter(self, SMDs))
+	def writeSMDs(self, outpath:str, model, skeSMD:str, lodIdx:int = 0):
+		model:Model = model
+
+		self.setSubTask(model)
+		SMDs = model.getSMD(f"_lod{lodIdx}" if lodIdx > 0 else "")
+
+		smdNames:dict[str, list[str]] = {}
+
+		for smd in SafeIter(self, SMDs):
+			if not smd.baseName in smdNames:
+				smdNames[smd.baseName] = []
+			
+			smdNames[smd.baseName].append(smd.name)
 
 		self.clearSubTask()
 
-		skeleton = self.__model.skeleton
-
-		if skeleton is None:
-			skeSMD = "\n".join((
-				"nodes",
-				'0 "root" -1',
-				"end",
-				"skeleton", 
-				"time 0", 
-				"0 0 0 0 0 0 0",
-				"end"
-			))
-		elif skeleton.nodeCount > MAX_SOURCE_BONES:
-			log.log(f"SMD only supports {MAX_SOURCE_BONES} bones! (current: {skeleton.nodeCount})", LOG_ERROR)
-
-			skeSMD = "\n".join((
-				"nodes",
-				'0 "modelHasTooManyBones" -1',
-				"end",
-				"skeleton", 
-				"time 0", 
-				"0 0 0 0 0 0 0",
-				"end"
-			))
-
-			skeleton = None
-		else:
-			log.log("Generating skeleton SMD")
-			log.addLevel()
-			self.setSubTask(skeleton)
-			skeSMD = skeleton.getSMD()
-			self.clearSubTask()
-			log.subLevel()
-
 		fullSMD = "\n".join(("version 1", skeSMD))
 
-		if self.__collision is not None:
+		if self.__collision is not None and lodIdx == 0:
 			self.setSubTask(self.__collision)
 			colMdl = self.__collision.getModel(singleMesh = True)
 			self.setSubTask(colMdl)
-			SMDs.append(colMdl.getSMD()[0])
+			SMDs.append(colMdl.getSMD(dontSplit = True)[0])
 
 		for smd in SafeIter(self, SMDs):
 			smd:SMD
@@ -445,7 +478,8 @@ class SourceModel(Terminable):
 			mkdir(outpath)
 
 		log.log("Generating VMTs")
-		
+		log.addLevel()
+
 		materialsPath = path.join(outpath, self.getMaterialsDir(customPath))
 		texturePaths = TexturePathDict(customPath)
 
@@ -472,6 +506,64 @@ class SourceModel(Terminable):
 
 		return texturePaths
 
+	def getSkeletonSMD(self):
+		skeleton = self.__model.skeleton
+
+		if skeleton is None:
+			skeSMD = "\n".join((
+				"nodes",
+				'0 "root" -1',
+				"end",
+				"skeleton", 
+				"time 0", 
+				"0 0 0 0 0 0 0",
+				"end"
+			))
+		elif skeleton.nodeCount > MAX_SOURCE_BONES:
+			log.log(f"SMD only supports {MAX_SOURCE_BONES} bones! (current: {skeleton.nodeCount})", LOG_ERROR)
+
+			skeSMD = "\n".join((
+				"nodes",
+				'0 "modelHasTooManyBones" -1',
+				"end",
+				"skeleton", 
+				"time 0", 
+				"0 0 0 0 0 0 0",
+				"end"
+			))
+
+			skeleton = None
+		else:
+			log.log("Generating skeleton SMD")
+			log.addLevel()
+			self.setSubTask(skeleton)
+			skeSMD = skeleton.getSMD()
+			self.clearSubTask()
+			log.subLevel()
+		
+		return skeSMD
+	
+	def writeIdle(self, outpath:str, skeSMD:str):
+		outdir = path.join(outpath, "anims")
+		
+		if not path.exists(outdir):
+			mkdir(outdir)
+
+		log.log("Writing idle anim")
+
+		file = open(path.join(outdir, "idle.smd"), "w")
+		file.write("version 1\n")
+		file.write(skeSMD)
+		file.close()
+	
+	def writeTinyTriangle(self, outpath:str):
+		log.log("Writing tiny triangle")
+
+		file = open(path.join(outpath, "tinytriangle.smd"), "w")
+		file.write(TINY_TRIANGLE_SMD)
+		file.close()
+
+
 	def export(self, 
 			outpath:str = getcwd(),
 			customPath:str = "dae_out",
@@ -487,12 +579,37 @@ class SourceModel(Terminable):
 		
 		log.log(f"Exporting {self.name} to Source")
 		log.addLevel()
-
+		
 		texturePaths = self.writeVMTs(outpath, customPath)
 
 		if exportSMD:
-			smdNames = self.writeSMDs(outpath)
-			qc = self.writeQC(outpath, customPath, smdNames)
+			skeSMD = self.getSkeletonSMD()
+			self.writeIdle(outpath, skeSMD)
+
+			if self.__allLODs is None:
+				allLods = (self.model, )
+			else:
+				allLods = (self.model, *self.__allLODs)
+
+				self.writeTinyTriangle(outpath)
+			
+			lodSmdNames:list[tuple[float, dict[str, list[str]]]] = []
+
+			for lodId, model in SafeEnumerate(self, allLods):
+				log.log(f"Exporting LOD {lodId} SMDs")
+				log.addLevel()
+
+				tempSmdNames = self.writeSMDs(outpath, model, skeSMD, lodId)
+
+				if lodId == 0:
+					smdNames = tempSmdNames
+				else:
+					lodSmdNames.append((model.distance, tempSmdNames))
+
+				
+				log.subLevel()
+			
+			qc = self.writeQC(outpath, customPath, smdNames, lodSmdNames)
 		else:
 			qc = None
 
@@ -541,27 +658,32 @@ class Model(Terminable):
 			
 			self.materials[startFaceIdx] = materialName
 	
+	DEFAULT_SCALE = (1, 1, 1)
+	DEFAULT_OFFSET = (0, 0, 0, 0)
+
 	def __init__(self,
 		  	name:str,
-		  	vertScale:tuple[float, float, float] = (1, 1, 1), 
+		  	vertScale:tuple[float, float, float] = DEFAULT_SCALE, 
 		  	skeleton = None,
 			materials:tuple[MaterialData] = None,
 			exportName:str = None,
-			vertOffet:tuple[float, float, float, float] = (0, 0, 0, 0)):
+			vertOffet:tuple[float, float, float, float] = DEFAULT_OFFSET,
+			distance:float = 0.0):
 		self.__vertScale = vertScale # tuple(v * VERTEX_SCALE for v in vertScale)
 		self.__name = name
 		self.__skeleton:GeomNodeTree = skeleton
 		self.__materials = materials
 		self.__vertOffet = vertOffet
+		self.__distance = distance
 
 		if exportName is None:
 			exportName = name
 		
 		self.__exportName = exportName
 
-		self.__objects:list[self.Object] = []
-		self.__vertLists:list[Iterable[tuple[float, float, float]]] = []
-		self.__uvLists:list[Iterable[tuple[float, float]]] = []
+		self.__objects:list[Model.Object] = []
+		self.__vertices:list[tuple[float, float, float]] = []
+		self.__uvs:list[tuple[float, float]] = []
 
 	# 
 
@@ -572,13 +694,12 @@ class Model(Terminable):
 				(vertex[2] * self.__vertScale[2]) + self.__vertOffet[2],
 		 	  )
 
-	def appendVerts(self, verts:Iterable[tuple[float, float, float]], UVs:Iterable[tuple[float, float]]):
-		self.__vertLists.append(tuple(self.__scaleVertex(v) for v in verts))
+	def appendVerts(self, verts:Iterable[tuple[float, float, float]], UVs:Iterable[tuple[float, float]], scale:bool = True):
+		if scale:
+			verts = tuple(self.__scaleVertex(v) for v in verts)
 		
-		self.__uvLists.append(UVs)
-
-	def getVertCount(self):
-		return sum(len(v) for v in self.__vertLists)
+		self.__vertices.extend(verts)
+		self.__uvs.extend(UVs)
 	
 	def __getitem__(self, key:Union[int, str]):
 		if isinstance(key, str):
@@ -602,20 +723,14 @@ class Model(Terminable):
 	def mergeModel(self, mdl):
 		mdl:Model = mdl
 		
-		vOfs = self.getVertCount()
+		vOfs = self.vertCnt
 
 		log.log(f"Merging {mdl.name} with {self.name}")
 		log.addLevel()
 
-		listCnt = len(self.__vertLists)
-
-		for i in SafeRange(self, len(mdl.__vertLists)):
-			verts = mdl.__vertLists[i]
-			UVs = mdl.__uvLists[i]
-
-			self.appendVerts(verts, UVs)
+		self.appendVerts(mdl.__vertices, mdl.__uvs, scale = False)
 		
-		log.log(f"Added {len(mdl.__vertLists)} vertex lists to our {listCnt} vertex lists (offset = {vOfs})")
+		log.log(f"Appended {len(mdl.__vertices)} vertices and UVs (offset = {vOfs})")
 
 		if mdl.materials is not None:
 			if self.materials is None:
@@ -654,10 +769,10 @@ class Model(Terminable):
 		raise IndexError(f"Can't find {id} ({ofs=})")
 	
 	def getUV(self, id:int) -> tuple[float, float, float]:
-		return self.__getTuple__(self.__uvLists, id)
+		return self.__uvs[id]
 	
 	def getVertex(self, id:int, scale:bool = False, parentBone = None) -> tuple[float, float, float]:
-		v = self.__getTuple__(self.__vertLists, id)
+		v = self.__vertices[id]
 
 		if parentBone is not None:
 			v = vectorTransform(parentBone.wtm, v)
@@ -667,6 +782,14 @@ class Model(Terminable):
 		else:
 			return (v[0] * VERTEX_SCALE, v[1] * VERTEX_SCALE, v[2] * VERTEX_SCALE)
 	
+	def getFaceCount(self):
+		cnt = 0
+
+		for obj in SafeIter(self, self.__objects):
+			cnt += len(obj.faces)
+		
+		return cnt
+
 	def __iter__(self):
 		return self.__objects.__iter__()
 	
@@ -686,42 +809,30 @@ class Model(Terminable):
 	# Model export
 
 	def getOBJ(self):
-		objVerts = []
-		objUVs = []
+		objVerts = [None] * self.vertCnt
+		objUVs = [None] * self.vertCnt
+		objNormals = [None] * self.vertCnt
 		objFaces = []
+		
+		normals = [None] * self.vertCnt
+		normal = [None] * 3
 
 		fV = lambda v: f"{v:.4f}"
+		ff = lambda x: f"{x + 1}/{x + 1}/{x + 1}"
 
 		skeleton = self.__skeleton
 
-		for k in SafeRange(self, len(self.__vertLists)):
-			vList = self.__vertLists[k]
-			uvList = self.__uvLists[k]
-
-			for i in SafeRange(self, len(vList)):
-				if skeleton is None:
-					v = vList[i]
-
-					objVerts.append(f"v {fV(v[0])} {fV(v[1])} {fV(v[2])}")
-				else:
-					objVerts.append("")
-				
-				uv = uvList[i]
-
-				objUVs.append(f"vt {fV(uv[0])} {fV(uv[1])}")
-
-		ff = lambda x: f"{x + 1}/{x + 1}" 
+		faceOfs = 0
 
 		for obj in SafeIter(self, self.__objects):
 			obj:Model.Object
 
 			objFaces.append(f"g {obj.name}")
 
-			if skeleton is not None:
-				if obj.skinned:
-					parentNode = None
-				else:
-					parentNode = skeleton.getNodeByName(obj.name)
+			if skeleton is not None and not obj.skinned:
+				parentNode = skeleton.getNodeByName(obj.name)
+			else:
+				parentNode = None
 
 			for i in SafeRange(self, obj.faceCount):
 				if i in obj.materials:
@@ -729,67 +840,115 @@ class Model(Terminable):
 				
 				f = obj.faces[i]
 
-				if skeleton is not None:
-					for vId in SafeIter(self, f):
-						if len(objVerts[vId]) == 0:
-							v = self.getVertex(vId, parentBone = parentNode)
-							
-							objVerts[vId] = f"v {fV(v[0])} {fV(v[1])} {fV(v[2])}"
+				for k, vId in SafeEnumerate(self, f):
+					v = self.getVertex(vId, parentBone = parentNode)
+					normal[k] = (v[0], v[1], -v[2])
+					
+					if objVerts[vId] is None:
+						objVerts[vId] = f"v {fV(v[0])} {fV(v[1])} {fV(-v[2])}"
 
+						uv = self.getUV(vId)
+
+						objUVs[vId] = f"vt {fV(uv[0])} {fV(uv[1])}"
+				
+				self.generateNormal(normal, normals, f, populate = False)
+				
 				objFaces.append(f"f {ff(f[0])} {ff(f[1])} {ff(f[2])}")
+
+		log.log("Normalizing normals")
+
+		for k, v in SafeEnumerate(self, normals):
+			normalize(v)
+			
+			objNormals[k] = f"vn {fV(v[0])} {fV(v[1])} {fV(v[2])}"
+
 
 		return Model.__join((
 			Model.__join(objVerts),
 			Model.__join(objUVs),
+			Model.__join(objNormals),
 			Model.__join(objFaces),
 		))
 	
+	def generateNormal(self, 
+					normal:list[float, float, float], 
+					normals:list[list[float, float, float]], 
+					face:tuple[int, int, int],
+					populate:bool = True):
+		if populate:
+			normal[0] = self.__vertices[face[0]]
+			normal[1] = self.__vertices[face[1]]
+			normal[2] = self.__vertices[face[2]]
+
+		normal = getNormal(*normal)
+
+		for idx in SafeIter(self, face):
+			if normals[idx] is None:
+				normals[idx] = [0, 0, 0]
+			
+			normals[idx][0] += normal[0]
+			normals[idx][1] += normal[1]
+			normals[idx][2] += normal[2]
+
 	def getDMF(self):
 		log.log("Writing model DMF")
 		log.addLevel()
+		
+
+		normals = [None] * self.vertCnt
+		normal = [None] * 3
+		
+		objBuffer = BBytesIO()
+
+		for obj in SafeIter(self, self.__objects):
+			obj:Model.Object
+
+			log.log(f"Writing {obj.name} @ {objBuffer.tell()}")
+
+			objBuffer.writeString(obj.name)
+			objBuffer.writeInt(1 if obj.skinned else 0)
+			objBuffer.writeInt(obj.faceCount)
+
+			for f in SafeIter(self, obj.faces):
+				objBuffer.write(pack("III", *f))
+
+				self.generateNormal(normal, normals, f)
+
+			objBuffer.writeInt(len(obj.materials))
+
+			for faceIdx in obj.materials:
+				matName = obj.materials[faceIdx]
+
+				objBuffer.writeInt(faceIdx)
+				objBuffer.writeString(str(matName))
+
+
+
+		vertBuffer = BytesIO()
+		normalBuffer = BytesIO()
+		uvBuffer = BytesIO()
+		
+		for i in SafeRange(self, self.vertCnt):
+			normal = normals[i]
+			normalize(normal)
+
+			vertBuffer.write(pack("fff", *self.__vertices[i]))
+			normalBuffer.write(pack("fff", *normal))
+			uvBuffer.write(pack("ff", *self.__uvs[i]))
 
 		buffer = BBytesIO()
 		buffer.write(DMF_MAGIC)
 
 		buffer.write(pack("III", DMF_VDATA_OFS, 0x0, 0x0))
 		buffer.write(pack("fff", *self.__vertScale[:3]))
-		buffer.writeInt(self.getVertCount())
-
-		vertBuffer = BytesIO()
-		uvBuffer = BytesIO()
-
-		for k in SafeRange(self, len(self.__vertLists)):
-			verts = self.__vertLists[k]
-			UVs = self.__uvLists[k]
-			
-			for i in SafeRange(self, len(verts)):
-				vertBuffer.write(pack("fff", *verts[i]))
-				uvBuffer.write(pack("ff", *UVs[i]))
+		buffer.writeInt(self.vertCnt)
 		
 		buffer.write(vertBuffer.getvalue())
+		buffer.write(normalBuffer.getvalue())
 		buffer.write(uvBuffer.getvalue())
 
 		buffer.writeInt(len(self.__objects))
-
-		for obj in SafeIter(self, self.__objects):
-			obj:Model.Object
-
-			log.log(f"Writing {obj.name} @ {buffer.tell()}")
-
-			buffer.writeString(obj.name)
-			buffer.writeInt(1 if obj.skinned else 0)
-			buffer.writeInt(obj.faceCount)
-
-			for f in SafeIter(self, obj.faces):
-				buffer.write(pack("III", *f))
-			
-			buffer.writeInt(len(obj.materials))
-
-			for faceIdx in obj.materials:
-				matName = obj.materials[faceIdx]
-
-				buffer.writeInt(faceIdx)
-				buffer.writeString(str(matName))
+		buffer.write(objBuffer.getvalue())
 
 		value = buffer.getvalue()
 
@@ -826,15 +985,17 @@ class Model(Terminable):
 		else:
 			return self.__skeleton.getDMF()
 
-	def getSMD(self):
+	def getSMD(self, suffix:str = "", dontSplit:bool = False):
 		log.log("Writing model SMD")
 		log.addLevel()
 
 		smdFiles:list[SMD] = []
 		
+		
 		invY = lambda v: (v[0], v[1], -v[2])
 
-		normals = [[0.0, 0.0, 0.0] for verts in SafeIter(self, self.__vertLists) for _ in SafeIter(self, verts)]
+		normal = [None] * 3
+		normals = [None] * self.vertCnt
 		skeleton = self.__skeleton
 
 		for obj in SafeIter(self, self.__objects):
@@ -843,11 +1004,16 @@ class Model(Terminable):
 
 			log.log(f"Building {obj.name} ({obj.faceCount} faces)")
 			log.addLevel()
-
+			
 			subObjCnt = ((obj.faceCount * 3) // MAX_SOURCE_VERTS) + 1
 
 			if subObjCnt > 1:
-				log.log(f"Model has too many verts, cutting into {subObjCnt} models")
+				if dontSplit:
+					log.log(f"Model has too many verts, but we ignored cutting", LOG_WARN)
+
+					subObjCnt = 1
+				else:
+					log.log(f"Model has too many verts, cutting into {subObjCnt} models")
 			
 			getFcnt = lambda id: (id * MAX_SOURCE_VERTS) // 3
 
@@ -858,10 +1024,10 @@ class Model(Terminable):
 
 			for objId in SafeRange(self, subObjCnt):
 				if subObjCnt > 1:
-					smd = SMD(f"{obj.name}_{objId}")
+					smd = SMD(f"{obj.name}_{objId}{suffix}", obj.name)
 					log.log(f"Building {objId + 1}/{subObjCnt}")
 				else:
-					smd = SMD(obj.name)
+					smd = SMD(f"{obj.name}{suffix}", obj.name)
 				
 				for i in SafeRange(self, getFcnt(objId), min(getFcnt(objId + 1), obj.faceCount)):
 					if i in obj.materials:
@@ -870,17 +1036,12 @@ class Model(Terminable):
 					f = obj.faces[i]
 					
 					verts = (
-						self.getVertex(f[0], True, parentBone if not obj.skinned else None),
-						self.getVertex(f[1], True, parentBone if not obj.skinned else None),
-						self.getVertex(f[2], True, parentBone if not obj.skinned else None)
+						invY(self.getVertex(f[0], True, parentBone if not obj.skinned else None)),
+						invY(self.getVertex(f[1], True, parentBone if not obj.skinned else None)),
+						invY(self.getVertex(f[2], True, parentBone if not obj.skinned else None))
 					)
 					
-					normal = getNormal(*verts)
-
-					for idx in SafeIter(self, f):
-						normals[idx][0] += normal[0]
-						normals[idx][1] += normal[1]
-						normals[idx][2] += normal[2]
+					self.generateNormal(verts, normals, f, populate = False)
 
 					UVs = (
 						self.getUV(f[0]),
@@ -906,12 +1067,7 @@ class Model(Terminable):
 		log.log("Normalizing normals")
 
 		for normal in SafeIter(self, normals):
-			length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2])
-			
-			if length != 0.0:
-				normal[0] /= length
-				normal[1] /= length
-				normal[2] /= length
+			normalize(normal)
 
 
 		log.subLevel()
@@ -919,7 +1075,7 @@ class Model(Terminable):
 		return smdFiles
 
 	
-	def exportObj(self, output:str = getcwd(), exportTexture:bool = True):
+	def exportObj(self, output:str = getcwd(), exportTexture:bool = True, forceConvert:bool = False):
 		log.log(f"Exporting {self.exportName} as OBJ")
 		log.addLevel()
 
@@ -938,7 +1094,7 @@ class Model(Terminable):
 			file.close()
 
 			if exportTexture:
-				mtl.exportTextures(output)
+				mtl.exportTextures(output, forceConvert)
 
 			log.subLevel()
 
@@ -952,11 +1108,11 @@ class Model(Terminable):
 
 		log.log(f"Wrote {len(obj)} bytes to {fileName}")
 	
-	def exportDmf(self, output:str = getcwd(), exportTexture:bool = True):
+	def exportDmf(self, output:str = getcwd(), exportTexture:bool = True, forceConvert:bool = False):
 		log.log(f"Exporting {self.exportName} as DMF")
 		log.addLevel()
 		
-		self.exportTextures(output, exportTexture)
+		self.exportTextures(output, exportTexture, forceConvert = forceConvert)
 
 		fileName = f"{self.exportName}.dmf"
 		buffer = BBytesIO(self.getDMF())
@@ -986,7 +1142,11 @@ class Model(Terminable):
 
 		log.log(f"Wrote {len(dat)} bytes to {fileName}")
 
-	def exportTextures(self, output:str = getcwd(), exportTexture:bool = True):
+	def exportTextures(self, 
+		    output:str = getcwd(), 
+		    exportTexture:bool = True,
+		    texturePaths:TexturePathDict = None, 
+			forceConvert:bool = False):
 		if self.materials is not None and exportTexture:
 			log.log("Exporting textures")
 			log.addLevel()
@@ -997,14 +1157,25 @@ class Model(Terminable):
 				mat:MaterialData
 				
 				for tex in SafeIter(self, mat.textures):
-					if tex in exported:
-						continue
+					for i in SafeRange(self, 2): # im lazy
+						if i == 0:
+							texN = mat.checkModifiedName(MaterialData.getTexFileName(tex), texturePaths)
 
-					exported.add(tex)
+							if texN == tex:
+								continue
+						else:
+							tex = tex
 
-					self.setSubTask(mat)
-					mat.exportTexture(tex, output)
-					self.clearSubTask()
+							texN = None
+						
+						if texN in exported:
+							continue
+
+						exported.add(texN)
+
+						self.setSubTask(mat)
+						mat.exportTexture(tex, output, forceConvert, texturePaths, texN)
+						self.clearSubTask()
 
 			log.subLevel()
 	
@@ -1012,8 +1183,16 @@ class Model(Terminable):
 	# properties
 
 	@property
+	def vertCnt(self):
+		return len(self.__vertices)
+
+	@property
 	def skeleton(self):
 		return self.__skeleton
+
+	@property
+	def distance(self):
+		return self.__distance
 
 	@property
 	def materials(self):
@@ -1534,8 +1713,8 @@ class RendInst(RealResData, ModelContainer):
 
 		impostorDataOfs = readInt(data)
 		
-		occ = tuple(unpack("IIfI", file.read(0x10)) for i in SafeRange(self, self.lodCount)) # occ table is acutally a float[12]
-
+		self.__occ = tuple(self._readOcc(file) for i in SafeRange(self, self.lodCount))
+		
 		if impostorDataOfs > 0:
 			file.seek(ofs + impostorDataOfs, 0)
 
@@ -1543,6 +1722,13 @@ class RendInst(RealResData, ModelContainer):
 			impostorSz = readLong(file)
 
 			self._readImposorData(file.readBlock(impostorSz - (file.tell() - ofs)))
+	
+	def _readOcc(self, file:BinBlock):
+		occ = unpack("Qf", file.read(0xC))
+
+		file.seek(0x4, 1)
+
+		return occ
 	
 	def _readImposorData(self, file:BinBlock):
 		# cMethod = readLong(file)
@@ -1639,7 +1825,8 @@ class RendInst(RealResData, ModelContainer):
 
 		mdl = Model(self.name, 
 		  materials = self.materials,
-		  exportName = self.getExportName(lodId))
+		  exportName = self.getExportName(lodId),
+		  distance = self.__occ[lodId][1])
 		obj = mdl.newObject(self.name)
 
 		mvd = self.mvd
@@ -1656,8 +1843,13 @@ class RendInst(RealResData, ModelContainer):
 	def getExportName(self, lodId:int):
 		return f"{self.name}_{lodId}"
 
-	def getSourceModel(self, lodId:int = 0):
-		return SourceModel(self.name, self.getModel(lodId), self.collision)
+	def getSourceModel(self, lodId:int = 0, exportLODs:bool = False):
+		if exportLODs and self.lodCount > 1:
+			allLODs = tuple(self.getModel(i) for i in SafeRange(self, 1, self.lodCount))
+		else:
+			allLODs = None
+		
+		return SourceModel(self.name, self.getModel(lodId), self.collision, allLODs)
 	
 
 		
@@ -1844,12 +2036,6 @@ class DynModel(RendInst):
 		
 		self.__occ = tuple(self._readOcc(file) for i in SafeRange(self, self.lodCount))
 	
-	def _readOcc(self, file:BinBlock):
-		occ = unpack("Qf", file.read(0xC))
-
-		file.seek(0x4, 1)
-
-		return occ
 
 	def _readSceneNodes(self, file:BinBlock):
 		log.log("Processing scene nodes")
@@ -1958,7 +2144,10 @@ class DynModel(RendInst):
 		
 		computeMaterialNames(materials, self)
 		
-		mdl = Model(f"{self.name}_skinnedmesh", materials = materials)
+		mdl = Model(f"{self.name}_skinnedmesh", 
+		  			vertScale = self.__bpC255,
+					vertOffet = self.__bpC254,
+					materials = materials)
 
 		log.log(f"Gathering vertex data for skinned MVD")
 		log.addLevel()
@@ -1997,7 +2186,8 @@ class DynModel(RendInst):
 					skeleton = self.geomNodeTree,
 					materials = self.materials,
 					exportName = self.getExportName(lodId),
-					vertOffet = self.__bpC254)
+					vertOffet = self.__bpC254,
+					distance = self.__occ[lodId][1])
 
 		log.log(f"Generating LOD {lodId} OBJ for {self.name}")
 		log.addLevel()
@@ -2141,7 +2331,7 @@ class CollisionGeom(RealResData, ModelContainer):
 
 			tm = matrix_mul(tm, scaleFix)
 			pos = bSphere[0]
-			print("POSOFS", bSphere)
+			# print("POSOFS", bSphere)
 
 			vCnt = readInt(file)
 			
@@ -2704,14 +2894,15 @@ if __name__ == "__main__":
 		newDyn.mvd.computeData()
 	
 	models:list[RendInst] = []
-	# grp = GameResourcePack(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\content\base\res\gm_lvl_assets.grp")
-	# models.append(grp.getResourceByName("fishing_net_d_destr"))
-	# grp = GameResourcePack(r"D:\OldWindows\Users\Gredwitch\AppData\Local\Enlisted\content\base\res\halftrack_m13.grp")
-	# models.append(grp.getResourceByName("halftrack_m13"))
+	# grp = GameResourcePack(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\content\base\res\locations.grp")
+	# models.append(grp.getResourceByName("tree_02_dstr"))
+	grp = GameResourcePack(r"D:\OldWindows\Users\Gredwitch\AppData\Local\Enlisted\content\base\res\halftrack_m13.grp")
+	mdl = grp.getResourceByName("halftrack_m13")
 
-	mdl:DynModel = DynModel("output/battlecruiser_von_der_tann.dyn")
+	# mdl:RendInst = models[0] # DynModel("output/pzkpfw_IV_ausf_C.dyn")
 	mdl.computeData()
 	
+	mvd = mdl.mvd
 	mvd = mdl.skinnedMeshRes.mvd
 	# print(mvd)
 	mvd.computeData()
@@ -2723,6 +2914,7 @@ if __name__ == "__main__":
 		PADDING = VD.PADDING
 		SHORT_UV = VD.SHORT_UV
 		FLOAT_UV = VD.FLOAT_UV
+		HALFFLOAT_UV = VD.HALFFLOAT_UV
 		NO_UV = VD.NO_UV
 
 		VF = [FLOAT_VERTEX(), SHORT_VERTEX()]
@@ -2746,7 +2938,7 @@ if __name__ == "__main__":
 				return 8
 			elif type(el) == SHORT_VERTEX:
 				return 6
-			elif type(el) == SHORT_UV:
+			elif type(el) == SHORT_UV or type(el) == HALFFLOAT_UV:
 				return 4
 			elif type(el) == NO_UV:
 				return 0
@@ -2781,31 +2973,54 @@ if __name__ == "__main__":
 
 			maxPadding = vStride - sz
 
-			for j in range(0, sz, STEP):
-				maxI = maxPadding - j
+			for frontPadding in range(0, maxPadding + 1, STEP):
+				maxInterPadding = maxPadding - frontPadding
 
-				for i in range(0, maxI, STEP):
-					endP = maxI - i
+				for interPadding in range(0, maxInterPadding + 1, STEP):
+					endPadding = (maxPadding - frontPadding) - interPadding
 
-					string = f"vf{vFormat}-{vStride}_{i}_{cfg[0].__class__.__name__}_{j}_{cfg[1].__class__.__name__}_{endP}"
+					string = f"vf{vFormat}-{vStride}_{frontPadding}_{cfg[0].__class__.__name__}_{interPadding}_{cfg[1].__class__.__name__}_{endPadding}"
 
-					print(string)
+					fp = path.join("test", f"{mvd.name}_{vdId}_{string}")
+
+					if path.exists(f"{fp}.obj"):
+						print(f"Skipping existing {string}")
+
+						continue
+					elif path.exists(f"{fp}.ignore"):
+						print(f"Ignoring already stupid {string}")
+
+						continue
+					else:
+						print(f"test/{mvd.name}_{vdId}_{string}.obj")
 
 					MatVData.VertexData.FORMATS[vFormat][vStride] = (
-						PADDING(i), 
+						PADDING(frontPadding), 
 						cfg[0], 
-						PADDING(j), 
+						PADDING(interPadding), 
 						cfg[1],
-						PADDING(endP))
+						PADDING(endPadding))
 					
 					vData = mvd.getVertexData(vdId)
 					
-					if (checkStupidity(vData.getVertices(), MAX_VERTEX) 
-						or (not IGNORE_UV and checkStupidity(vData.getUVs(), MAX_UV))):
+					stupidVertex = checkStupidity(vData.getVertices(), MAX_VERTEX)
+					stupidUV = not IGNORE_UV and checkStupidity(vData.getUVs(), MAX_UV)
+
+					if (stupidUV or stupidVertex):
+						print(f"\tIgnoring stupid model {stupidVertex=} {stupidUV=}")
+
+						# file = open(f"{fp}.ignore", "w")
+						# file.write("IGNORE")
+						# file.close()
+
 						continue
 					
 					mvd.quickExportVDataToObj(vdId, f"_{string}", "test")
 
-	mvd._setName("bs")
-	findVertexData(mvd, 2, 10000, False, 3, 1)
+	# print()
+	# mvd._setName("m13")
+	# findVertexData(mvd, 0, 10000, False, 2000, 1)
+	# mvd.save()
+	# print(mvd.getVertexDataOffset(2))
+	# mdl.mvd.quickExportVDataToObj(0)
 	# mvd.quickExportVDataToObj(2)

@@ -41,7 +41,7 @@ SHOULD_CACHE:tuple[type[Exportable]] = (
 )
 
 DBLD_FILTER = ["Dagor Binary Level Data (*.bin)"]
-	
+
 
 def handleCaching(asset:Exportable):
 	for type in SHOULD_CACHE:

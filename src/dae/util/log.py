@@ -23,7 +23,7 @@ def incrLevel(level:int = 0):
 	levelStr = ""
 
 	if curLevel < 0:
-		level = 0
+		raise Exception(f"Impossible level {curLevel}")
 
 	for i in range(curLevel):
 		levelStr += "    "

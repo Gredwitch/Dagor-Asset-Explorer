@@ -21,8 +21,6 @@ from gui.progressDialog import MessageBox
 from util.settings import SETTINGS
 from subprocess import Popen
 from glob import glob
-from PIL import Image
-from PIL.ImageChops import invert
 import shutil
 # from gui.previewDialog import PreviewDialog
 
@@ -109,6 +107,7 @@ class SimpleItem:
 
 							submenu.addAction(ExportLODsToDMF(menu, self))
 							submenu.addAction(ExportLODsToOBJ(menu, self))
+							submenu.addAction(ExportLODsToSource(menu, self))
 				except Exception as e:
 					print(format_exc())
 
@@ -534,39 +533,7 @@ class PreviewModel(CustomAction):
 		# PreviewDialog(self.mainWindow, asset.getObj(self.lod)).show()
 
 
- 
-class ExportToDMF(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
-	def __init__(self, parent, item: SimpleItem, lod:int):
-		self.lod = lod
 
-		super().__init__(parent, item)
-	
-	item:AssetItem
-
-	@property
-	def actionText(self) -> str:
-		return f"Export LOD {self.lod} to DMF"
-	
-	@property
-	def taskTitle(self) -> str:
-		if isinstance(self.item.asset, GeomNodeTree):
-			return f"Exporting skeleton to {self.item.asset.name}.dmf"
-		else:
-			return f"Exporting LOD to {self.item.asset.getExportName(self.lod)}.dmf"
-
-	def save(self, output:str):
-		asset:RendInst = self.item.asset
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-		
-		self.setTerminable(asset)
-		mdl = asset.getModel(self.lod)
-		self.setTerminable(mdl)
-		mdl.exportDmf(output, exportTex)
-		self.clearTerminable()
-		
-
-		self.setTaskProgress(1)
- 
 class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
 	def __init__(self, parent, item: SimpleItem, lod:int):
 		self.lod = lod
@@ -592,6 +559,7 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 		exportSMDs = SETTINGS.getValue(SETTINGS_EXPORT_SMD)
 		dontCompile = SETTINGS.getValue(SETTINGS_NO_MDL)
 		dontReplaceTex = SETTINGS.getValue(SETTINGS_DONT_EXPORT_EXISTING_TEXTURES)
+		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
 
 		if exportTex:
 			stepCnt = 5
@@ -599,14 +567,190 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 			stepCnt = 3
 		
 		self.setTaskStatus("Generating model data")
-		self.setTerminable(asset)
+
+		if self.handleTermination(asset):
+			return
+		
 		smdl = asset.getSourceModel(self.lod)
 		self.setTaskProgress(1/stepCnt)
-		self.setTerminable(smdl)
+		
+		if self.handleTermination(smdl):
+			return
+		
 		self.setTaskStatus("Exporting model data to QC, SMD and VMT")
 		qc, texturePaths = smdl.export(output, modelPath, exportCollisionModel, exportSMDs)
 		self.setTaskProgress(2/stepCnt)
 		self.clearTerminable()
+	
+		if self.shouldTerminate:
+			return
+		
+		gamePath = path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH))
+
+		output = path.join(output, smdl.name)
+		sourceExport = path.join(output, "source_export")
+
+		makedirs(sourceExport, exist_ok = True)
+
+		if exportSMDs and not dontCompile:
+			if self.shouldTerminate:
+				return
+			
+			self.setTaskStatus("Compiling")
+
+			pipes = Popen([
+				SETTINGS.getValue(SETTINGS_STUDIOMDL_PATH), 
+				"-nop4", 
+				"-verbose", 
+				"-game", 
+				path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH)), 
+				qc])
+			
+			self.setSubProcess(pipes)
+
+			if pipes.wait() != 0:
+				raise Exception(f"Compile failed: return code {pipes.returncode}")
+			
+			self.clearSubProcess()
+
+			if not exportToGame:
+				if self.shouldTerminate:
+					return
+				
+				modelOutPath = path.join(sourceExport, f"models/{modelPath}")
+
+				makedirs(modelOutPath, exist_ok = True)
+				
+				files = glob(path.join(gamePath, f"models/{modelPath}/{asset.name}.*"))
+
+				for f in files:
+					if self.shouldTerminate:
+						return
+					
+					log.log(f"Moving {f} to {modelOutPath}")
+					replace(f, path.join(modelOutPath, path.basename(f)))
+			
+		self.setTaskProgress(3/stepCnt)
+
+		if exportTex and texturePaths is not None:
+			self.setTaskStatus("Exporting textures")
+			log.addLevel()
+			mdl = smdl.model
+
+			if self.handleTermination(mdl):
+				return
+			
+			mdl.exportTextures(output, texturePaths = texturePaths, forceConvert = forceConvert)
+			self.clearTerminable()
+			log.subLevel()
+
+			if self.shouldTerminate:
+				return
+
+			self.setTaskProgress(4/stepCnt)
+			self.setTaskStatus("Converting textures to VTF")
+			log.addLevel()
+
+			materialsPath = path.join(sourceExport, "materials")
+
+			texDict = texturePaths.getDict()
+
+			for k, texName in enumerate(texDict.keys()):
+				if self.shouldTerminate:
+					return
+				
+				texFile = path.join(output, f"textures/{texName}.dds")
+
+				if not path.exists(texFile):
+					log.log(f"Skipping missing texture {texName}")
+
+					continue
+				
+				tex = texturePaths.get(texName)
+
+				texOutPath = path.normpath(path.join(materialsPath, tex.texPath))
+
+				if dontReplaceTex and path.exists(path.join(texOutPath, f"{texName}.vtf")):
+					log.log(f"Skipping already exported texture {texName}")
+
+					continue
+
+				makedirs(texOutPath, exist_ok = True)
+
+				pipes = Popen((
+					VTFCMD_PATH,
+					"-file",
+					path.normpath(texFile),
+					"-output",
+					texOutPath
+				))
+
+				self.setSubProcess(pipes)
+
+				pipes.wait()
+
+				self.clearSubProcess()
+
+				self.setTaskProgress((4 + (k + 1) / len(texDict))/stepCnt)
+
+			if exportToGame and path.exists(materialsPath):
+				log.log("Moving materials directory...")
+
+				shutil.copytree(materialsPath, path.join(gamePath, "materials"), dirs_exist_ok = True)
+				shutil.rmtree(materialsPath)
+			
+
+			if len(listdir(sourceExport)) == 0:
+				rmdir(sourceExport)
+
+			log.subLevel()
+			self.setTaskProgress(5/stepCnt)
+
+class ExportLODsToSource(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
+	item:AssetItem
+
+	@property
+	def actionText(self) -> str:
+		return "Export all LODs to Source engine"
+	
+	@property
+	def taskTitle(self) -> str:
+		return f"Exporting all LODs from {self.item.asset.name} to Source engine"
+
+	def save(self, output:str):
+		modelPath = "dae_out"
+		asset:RendInst = self.item.asset
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		exportToGame = SETTINGS.getValue(SETTINGS_EXPORT_GAMEINFO)
+		exportCollisionModel = SETTINGS.getValue(SETTINGS_STUDIOMDL_EXPORT_COLLISION)
+		exportSMDs = SETTINGS.getValue(SETTINGS_EXPORT_SMD)
+		dontCompile = SETTINGS.getValue(SETTINGS_NO_MDL)
+		dontReplaceTex = SETTINGS.getValue(SETTINGS_DONT_EXPORT_EXISTING_TEXTURES)
+		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
+
+		if exportTex:
+			stepCnt = 5
+		else:
+			stepCnt = 3
+		
+		self.setTaskStatus("Generating model data")
+
+		if self.handleTermination(asset):
+			return
+		
+		smdl = asset.getSourceModel(0, exportLODs = True)
+		self.setTaskProgress(1/stepCnt)
+
+		if self.handleTermination(smdl):
+			return
+		
+		self.setTaskStatus("Exporting model data to QC, SMD and VMT")
+		qc, texturePaths = smdl.export(output, modelPath, exportCollisionModel, exportSMDs)
+		self.setTaskProgress(2/stepCnt)
+		self.clearTerminable()
+
+		if self.shouldTerminate:
+			return
 		
 		
 		gamePath = path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH))
@@ -651,8 +795,12 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 			self.setTaskStatus("Exporting textures")
 			log.addLevel()
 			mdl = smdl.model
-			self.setTerminable(mdl)
-			mdl.exportTextures(output)
+
+			if self.handleTermination(mdl):
+				return
+			
+			mdl.exportTextures(output, texturePaths = texturePaths, forceConvert = forceConvert)
+
 			self.clearTerminable()
 			log.subLevel()
 
@@ -663,7 +811,11 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 			materialsPath = path.join(sourceExport, "materials")
 
 			texDict = texturePaths.getDict()
+
 			for k, texName in enumerate(texDict.keys()):
+				if self.shouldTerminate:
+					return
+				
 				texFile = path.join(output, f"textures/{texName}.dds")
 
 				if not path.exists(texFile):
@@ -681,22 +833,6 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 					continue
 
 				makedirs(texOutPath, exist_ok = True)
-
-
-
-				if tex.texType == TEXTURE_MASKED:
-					img = Image.open(texFile)
-					r, g, b, a = img.split()
-					img.close()
-					newImg = Image.merge("RGBA", (r, g, b, invert(a)))
-					newImg.save(texFile)
-				elif tex.texType == TEXTURE_NORMAL:
-					img = Image.open(texFile)
-					r, g, b, a = img.split()
-					img.close()
-					whiteChannel = Image.new("L", img.size, 255)
-					newImg = Image.merge("RGBA", (a, g, whiteChannel, r))
-					newImg.save(texFile)
 
 				pipes = Popen((
 					VTFCMD_PATH,
@@ -724,6 +860,41 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 			self.setTaskProgress(5/stepCnt)
 
 
+ 
+class ExportToDMF(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
+	def __init__(self, parent, item: SimpleItem, lod:int):
+		self.lod = lod
+
+		super().__init__(parent, item)
+	
+	item:AssetItem
+
+	@property
+	def actionText(self) -> str:
+		return f"Export LOD {self.lod} to DMF"
+	
+	@property
+	def taskTitle(self) -> str:
+		if isinstance(self.item.asset, GeomNodeTree):
+			return f"Exporting skeleton to {self.item.asset.name}.dmf"
+		else:
+			return f"Exporting LOD to {self.item.asset.getExportName(self.lod)}.dmf"
+
+	def save(self, output:str):
+		asset:RendInst = self.item.asset
+		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
+		
+		
+		self.setTerminable(asset)
+		mdl = asset.getModel(self.lod)
+		self.setTerminable(mdl)
+		mdl.exportDmf(output, exportTex, forceConvert)
+		self.clearTerminable()
+		
+
+		self.setTaskProgress(1)
+ 
 class ExportLODsToDMF(SaveAction):
 	item:AssetItem
 
@@ -740,6 +911,7 @@ class ExportLODsToDMF(SaveAction):
 		self.setTerminable(asset)
 		asset.computeData()
 		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
 
 		for i in range(asset.lodCount):
 			if self.handleTermination(asset):
@@ -748,7 +920,7 @@ class ExportLODsToDMF(SaveAction):
 			self.setTerminable(asset)
 			mdl = asset.getModel(i)
 			self.setTerminable(mdl)
-			mdl.exportDmf(output, exportTex)
+			mdl.exportDmf(output, exportTex, forceConvert)
 
 
 			self.setTaskProgress((i + 1) / asset.lodCount)
@@ -775,6 +947,7 @@ class ExportAllToDMF(SaveAction):
 		fileCnt = 0
 
 		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
 
 		for v in packedFiles:
 			if isinstance(v, RendInst):
@@ -800,7 +973,7 @@ class ExportAllToDMF(SaveAction):
 					self.setTerminable(v)
 					mdl = v.getModel(0)
 					self.setTerminable(mdl)
-					mdl.exportDmf(output, exportTex)
+					mdl.exportDmf(output, exportTex, forceConvert)
 
 					log.subLevel()
 				except Exception as e:
@@ -834,11 +1007,12 @@ class ExportToOBJ(SaveAction):
 	def save(self, output:str):
 		asset:RendInst = self.item.asset
 		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
 	
 		self.setTerminable(asset)
 		mdl = asset.getModel(self.lod)
 		self.setTerminable(mdl)
-		mdl.exportObj(output, exportTex)
+		mdl.exportObj(output, exportTex, forceConvert)
 
 		self.clearTerminable()
 		
@@ -861,6 +1035,7 @@ class ExportLODsToOBJ(SaveAction):
 		self.setTerminable(asset)
 		asset.computeData()
 		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
 
 		for i in range(asset.lodCount):
 			if self.handleTermination(asset):
@@ -869,7 +1044,7 @@ class ExportLODsToOBJ(SaveAction):
 			self.setTerminable(asset)
 			mdl = asset.getModel(i)
 			self.setTerminable(mdl)
-			mdl.exportObj(output, exportTex)
+			mdl.exportObj(output, exportTex, forceConvert)
 
 
 			self.setTaskProgress((i + 1) / asset.lodCount)
@@ -896,6 +1071,7 @@ class ExportAllToOBJ(SaveAction):
 		fileCnt = 0
 
 		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
+		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
 
 		for v in packedFiles:
 			if isinstance(v, RendInst):
@@ -921,7 +1097,7 @@ class ExportAllToOBJ(SaveAction):
 					self.setTerminable(v)
 					mdl = v.getModel(0)
 					self.setTerminable(mdl)
-					mdl.exportObj(output, exportTex)
+					mdl.exportObj(output, exportTex, forceConvert)
 
 					log.subLevel()
 				except Exception as e:

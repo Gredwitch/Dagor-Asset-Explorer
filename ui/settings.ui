@@ -63,6 +63,16 @@
         </widget>
        </item>
        <item>
+        <widget class="QCheckBox" name="convertTex">
+         <property name="text">
+          <string>Convert textures to DXT5</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QCheckBox" name="outputFolder">
          <property name="text">
           <string>Disable &quot;Save to...&quot; dialog and save everything to the &quot;output&quot; folder</string>
@@ -72,7 +82,7 @@
        <item>
         <widget class="QCheckBox" name="noTexExport">
          <property name="text">
-          <string>Don't export textures when exporting models</string>
+          <string>Do not export textures when exporting models</string>
          </property>
         </widget>
        </item>
@@ -212,7 +222,7 @@
            <item>
             <widget class="QCheckBox" name="noMDL">
              <property name="text">
-              <string>Don't compile to .mdl</string>
+              <string>Do not compile to .mdl</string>
              </property>
             </widget>
            </item>
@@ -253,7 +263,7 @@
               <bool>false</bool>
              </property>
              <property name="text">
-              <string>Don't export existing textures</string>
+              <string>Do not export existing textures</string>
              </property>
              <property name="checkable">
               <bool>true</bool>

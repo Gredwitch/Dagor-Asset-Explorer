@@ -26,6 +26,7 @@ class SettingsDialog(QDialog):
 	exportSMD:QCheckBox
 	noMDL:QCheckBox
 	dontExportExistingTextures:QCheckBox
+	convertTex:QCheckBox
 
 	studiomdlLine:QLineEdit
 	studioMdlBtn:QPushButton
@@ -44,6 +45,7 @@ class SettingsDialog(QDialog):
 		self.vLayout.setContentsMargins(-1, -1, -1, -1)
 
 		self.setupCheckBox(self.exportFolder, SETTINGS_EXPORT_FOLDER)
+		self.setupCheckBox(self.convertTex, SETTINGS_FORCE_DDS_CONVERSION)
 		self.setupCheckBox(self.exportPreviewTex, SETTINGS_EXPORT_PREVIEW_TEX)
 		self.setupCheckBox(self.extractFolder, SETTINGS_EXTRACT_FOLDER)
 		self.setupCheckBox(self.noTexExport, SETTINGS_NO_TEX_EXPORT)
