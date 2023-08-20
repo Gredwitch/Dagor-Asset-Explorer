@@ -87,12 +87,12 @@
         </widget>
        </item>
        <item>
-        <widget class="QCheckBox" name="exportPreviewTex">
+        <widget class="QCheckBox" name="expandAll">
          <property name="text">
-          <string>[NOT IMPLEMENTED] Export textures when previewing a model</string>
+          <string>Expand all items by default</string>
          </property>
          <property name="checkable">
-          <bool>false</bool>
+          <bool>true</bool>
          </property>
         </widget>
        </item>

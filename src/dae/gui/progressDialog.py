@@ -12,9 +12,6 @@ LOADING_GIF_PATH = getResPath("loading.gif")
 ERROR_ICO_PATH = getResPath("failure.png")
 
 
-				# PlaySound("SystemHand",SND_ALIAS | SND_ASYNC)
-
-				# box = QMessageBox()
 
 class MessageBox(QtWidgets.QMessageBox):
 	def __init__(self, text:str):
@@ -27,7 +24,6 @@ class MessageBox(QtWidgets.QMessageBox):
 		self.setWindowTitle("Unfunny!")
 		self.setText(text)
 		self.setStandardButtons(QtWidgets.QMessageBox.Ok)
-
 
 
 

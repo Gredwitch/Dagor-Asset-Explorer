@@ -3,6 +3,7 @@ from os import path
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
+import util.log as log
 from ctypes import create_string_buffer, c_void_p, c_int64, c_int, c_size_t
 from os import path
 from zlib import decompress as zlibdecompress
@@ -12,7 +13,6 @@ from pylzma import compress as lzmacompress
 from util.misc import loadDLL
 from struct import pack
 from util.fileread import *
-import util.log as log
 
 dakernel = loadDLL("daKernel-dev.dll")
 
@@ -21,25 +21,25 @@ if dakernel == None:
 else:
 	# size_t __fastcall oodle_compress(void *dst, unsigned __int64 maxDstSize, const void *src, unsigned __int64 srcSize, int compressionLevel)
 
-	oodle_compress = dakernel[557]
+	oodle_compress = dakernel[572]
 	oodle_compress.argtypes = c_void_p, c_int64, c_void_p, c_int64, c_int
 	oodle_compress.restype  = c_size_t
 
 	# __int64 __fastcall oodle_decompress(void *dst, unsigned __int64 maxOriginalSize, const void *src, unsigned __int64 compressedSize)
 
-	oodle_decompress = dakernel[559]
+	oodle_decompress = dakernel[574]
 	oodle_decompress.argtypes = c_void_p, c_int64, c_void_p, c_int64
 	oodle_decompress.restype  = c_int64
 
 	# unsigned __int64 __fastcall zstd_compress(void *dst, unsigned __int64 maxDstSize, const void *src, unsigned __int64 srcSize, int compressionLevel)
 
-	zstd_compress = dakernel[928]
+	zstd_compress = dakernel[954]
 	zstd_compress.argtypes = c_void_p, c_int64, c_void_p, c_int64, c_int
 	zstd_compress.restype  = c_int64
 
 	# unsigned __int64 __fastcall zstd_decompress(void *dst, unsigned __int64 maxOriginalSize, const void *src, unsigned __int64 srcSize)
 
-	zstd_decompress = dakernel[934]
+	zstd_decompress = dakernel[962]
 	zstd_decompress.argtypes = c_void_p, c_int64, c_void_p, c_int64
 	zstd_decompress.restype  = c_int64
 

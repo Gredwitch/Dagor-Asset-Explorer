@@ -1,13 +1,9 @@
 
-# from parse.gameres import GameResDesc
 from util.terminable import Exportable
 
 class AssetCacher:
 	__cachedAssets = {}
 	__modelsDesc = {}
-
-	# def __init__(self):
-	# 	pass
 
 	@classmethod
 	def cacheAsset(cls, asset:Exportable):

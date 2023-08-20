@@ -10,7 +10,7 @@ from io import BytesIO
 from util.fileread import *
 from util.enums import *
 from util.decompression import CompressedData, zlibDecompress
-from util.misc import getResPath, vectorTransform, matrix_mul, matrixToEuler
+from util.misc import getResPath, vectorTransform, matrixMul, matrixToEuler
 from util.assetcacher import AssetCacher
 from struct import unpack, pack
 from parse.datablock import *
@@ -18,8 +18,7 @@ from util.terminable import Packed, SafeRange, SafeIter, SafeEnumerate, Terminab
 from parse.mesh import MatVData, InstShaderMeshResource, ShaderMesh
 from parse.material import MaterialData, MaterialTemplateLibrary,  computeMaterialNames, TexturePathDict
 from abc import abstractmethod, ABC
-from math import sqrt, degrees, acos
-# from itertools import chain
+from math import sqrt
 
 
 PHYSMAT_TO_SURFACEPROP = {
@@ -809,9 +808,9 @@ class Model(Terminable):
 	# Model export
 
 	def getOBJ(self):
-		objVerts = [None] * self.vertCnt
-		objUVs = [None] * self.vertCnt
-		objNormals = [None] * self.vertCnt
+		objVerts = [""] * self.vertCnt
+		objUVs = [""] * self.vertCnt
+		objNormals = ["vn 0.0 0.0 0.0"] * self.vertCnt
 		objFaces = []
 		
 		normals = [None] * self.vertCnt
@@ -844,7 +843,7 @@ class Model(Terminable):
 					v = self.getVertex(vId, parentBone = parentNode)
 					normal[k] = (v[0], v[1], -v[2])
 					
-					if objVerts[vId] is None:
+					if objVerts[vId] == "":
 						objVerts[vId] = f"v {fV(v[0])} {fV(v[1])} {fV(-v[2])}"
 
 						uv = self.getUV(vId)
@@ -858,9 +857,10 @@ class Model(Terminable):
 		log.log("Normalizing normals")
 
 		for k, v in SafeEnumerate(self, normals):
-			normalize(v)
-			
-			objNormals[k] = f"vn {fV(v[0])} {fV(v[1])} {fV(v[2])}"
+			if v is not None:
+				normalize(v)
+				
+				objNormals[k] = f"vn {fV(v[0])} {fV(v[1])} {fV(v[2])}"
 
 
 		return Model.__join((
@@ -994,7 +994,7 @@ class Model(Terminable):
 		
 		invY = lambda v: (v[0], v[1], -v[2])
 
-		normal = [None] * 3
+		# normal = [None] * 3
 		normals = [None] * self.vertCnt
 		skeleton = self.__skeleton
 
@@ -1067,7 +1067,8 @@ class Model(Terminable):
 		log.log("Normalizing normals")
 
 		for normal in SafeIter(self, normals):
-			normalize(normal)
+			if normal is not None:
+				normalize(normal)
 
 
 		log.subLevel()
@@ -1763,7 +1764,7 @@ class RendInst(RealResData, ModelContainer):
 		if self.mvd is not None:
 			materials = self._generateMVDmaterials(self.mvd)
 		
-		if materials is not None and len(materials) == 0:
+		if materials is not None and materials == tuple():
 			materials = None
 
 		self._setMaterials(materials)
@@ -1896,13 +1897,13 @@ class RendInst(RealResData, ModelContainer):
 	def _getCachedAsset(self, objType:type, suffix:str):
 		assets = AssetCacher.getCachedAsset(objType, f"{self.name}{suffix}")
 		
-		if not assets or len(assets) == 0:
+		if not assets or assets == []:
 			name = self.name.split("_")
 
 			if name[-1] == "dynmodel":
 				assets = AssetCacher.getCachedAsset(objType, f"{'_'.join(name[:-1])}{suffix}")
 		
-		if not assets or len(assets) == 0:
+		if not assets or assets == []:
 			log.log(f"Could not find '{suffix}' asset", LOG_WARN)
 
 			return None
@@ -2329,7 +2330,7 @@ class CollisionGeom(RealResData, ModelContainer):
 				(0, 0, 0, 1),
 			)
 
-			tm = matrix_mul(tm, scaleFix)
+			tm = matrixMul(tm, scaleFix)
 			pos = bSphere[0]
 			# print("POSOFS", bSphere)
 
@@ -2408,12 +2409,25 @@ class CollisionGeom(RealResData, ModelContainer):
 
 		return "default"
 
+	def getSkeleton(self):
+		suffix = "skeleton"
+
+		assets = AssetCacher.getCachedAsset(GeomNodeTree, f"{'_'.join(self.name[:-1])}{suffix}")
+		
+		if not assets or assets == []:
+			log.log(f"Could not find '{suffix}' asset", LOG_WARN)
+
+			return None
+		else:
+			return assets[0]
+		
+	
 	def getModel(self, lodId:int = 0, singleMesh:bool = False):
 		self.__readFile__()
 
 		# print(self.getSurfaceProp())
 
-		mdl = Model(self.name)
+		mdl = Model(self.name, skeleton = self.getSkeleton())
 		
 		vOfs = 0
 
@@ -2704,323 +2718,3 @@ REALRES_CLASSES_LIST:tuple[type[RealResData]] = (
 )
 
 REALRES_CLASSES_DICT:dict[int, type[RealResData]] = {v.staticClassId:v for v in REALRES_CLASSES_LIST}
-
-if __name__ == "__main__":
-	from parse.gameres import GameResDesc, GameResourcePack, GameResourcePackBuilder
-	from parse.material import DDSxTexturePack2
-	from subprocess import Popen
-	from util.settings import SETTINGS
-	import os
-
-	def loadDXP(path):
-		dxp = DDSxTexturePack2(path)
-
-		for ddsx in dxp.getPackedFiles():
-			AssetCacher.cacheAsset(ddsx)
-
-	def cacheGrd(grd:GameResDesc):
-		AssetCacher.appendGameResDesc(grd)
-		grd.loadDataBlock()
-	
-	def findUniqueShaderClassesGRP(packs:list[GameResourcePack]):
-		shaders:dict[str, list[tuple[RendInst, MaterialData]]] = {}
-
-		grpCnt = len(packs)
-		
-		for gId, grp in enumerate(packs):
-			res = grp.getPackedFiles()
-			resCnt = len(res)
-
-			for rId, ri in enumerate(res):
-				if type(ri).__name__ != RendInst.__name__:
-					continue
-
-				print(f"{gId}/{grpCnt}:{rId}/{resCnt} - {len(shaders)}")
-				ri:RendInst
-
-				try:
-					ri.computeData()
-					ri.generateMaterials()
-
-					for mat in ri.materials:
-						cls = mat.cls
-
-						if not cls in shaders:
-							shaders[cls] = (ri, mat)
-				except:
-					log.subLevel(log.curLevel)
-					
-		
-		for cls in shaders:
-			shaders[1].debug()
-		print(shaders)
-		return shaders
-	
-	def findUniqueShaderClasses(desc:GameResDesc):
-		shaders:dict[str, tuple[str, MaterialData]] = {}
-
-		dblk = desc.getDataBlock()
-		children = dblk.getChildren()
-		
-		for k, blk in enumerate(children):
-			try:
-				print(f"{k+1}/{len(children)}:{len(shaders)}")
-
-				modelName = blk.getName()
-
-				for mat in desc.getModelMaterials(modelName):
-					if mat.cls in shaders and len(mat.textures) <= len(shaders[mat.cls][1].textures):
-						continue
-
-					shaders[mat.cls] = (modelName, mat)
-			except:
-				pass
-		
-		for modelName, mat in shaders.values():
-			try:
-				print(f"{modelName} - ", end = "")
-				mat.debug()
-			except:
-				pass
-
-	def doColTest(mdlname):
-		AssetCacher.cacheAsset(CollisionGeom(rf"C:\Users\qhami\Documents\WTBS\DagorAssetExplorer\output\{mdlname}_collision.col"))
-		mdl = RendInst(rf"C:\Users\qhami\Documents\WTBS\DagorAssetExplorer\output\{mdlname}.ri")
-		mdl.computeData()
-		qc = mdl.getSourceModel(0).export(outpath = "output", exportCollisionModel=True)
-
-		pipes = Popen([
-			SETTINGS.getValue(SETTINGS_STUDIOMDL_PATH), 
-			"-nop4", 
-			"-verbose", 
-			"-game", 
-			path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH)), 
-			qc]).wait()
-
-	def getAllModels(dir:str):
-		for f in os.listdir(dir):
-			ext = f.split(".")[-1]
-
-			if ext == "ri":
-				# mdl = RendInst(f"{dir}/{f}")
-				continue
-			elif ext == "dyn":
-				mdl = DynModel(f"{dir}/{f}")
-			else:
-				continue
-			
-			try:
-				mdl.computeData()
-
-				if mdl.skinnedMesh is None:
-					continue
-
-				models.append(mdl)
-			except:
-				pass
-	
-	def replace_model(modelName:str, grpName:str, dofunny:bool = False, skinned:bool = False, skinnedMesh:bool = False):
-		grp = GameResourcePack(rf"C:/Program Files (x86)/Steam/steamapps/common/War Thunder/content/base/res/{grpName} - Copy.grp")
-
-		builder = GameResourcePackBuilder(grpName)
-		for p in grp.getPackedFiles():
-			if p.name == modelName:
-				continue
-
-			builder.append(p)
-
-		mdl = DynModel(f"output/{modelName}.dyn")
-		mdl.computeData()
-		# mdl.getModel(0).exportObj()
-		binD = mdl.getBin()
-
-		if skinned:
-			file = open(f"{modelName}_skinned.mvd", "rb")
-		else:
-			file = open(f"{modelName}.mvd", "rb")
-		replaceMvd = BytesIO(file.read())
-		file.close()
-
-
-		if dofunny:
-			rep = b"\0" * 14
-			ofs = 10
-
-			for i in range(291):
-				rofs = (i * 24) + 0x120
-				replaceMvd.seek(rofs + ofs, 0)
-				replaceMvd.write(rep)
-				replaceMvd.seek(rofs, 0)
-				replaceMvd.write(b"\0" * 4)
-
-			file = open("replacedmvd", "wb")
-			file.write(replaceMvd.getvalue())
-			file.close()
-
-		from util.decompression import compressBlock
-
-
-		file = open("test_dyn", "wb")
-		
-		if skinned:
-			file.write(binD.read(mdl.skinnedMeshOfs + 28))
-		else:
-			file.write(binD.read(mdl.mvdOfs))
-
-		compressed = compressBlock(replaceMvd.getvalue(), 0x80)
-		file.write(compressed)
-
-		binD.seek(readEx(3, binD) + 1, 1)
-
-		if skinned and skinnedMesh:
-			rB = open(f"{modelName}_skinnedmesh.bin", "rb")
-			rest = compressBlock(rB.read(), 0x60)[4:]
-		else:
-			rest = binD.readRest()
-		
-		file.write(rest)
-
-		if skinned:
-			file.seek(mdl.skinnedMeshOfs, 0)
-			file.write(pack("I", len(rest) + 24 + len(compressed)))
-		file.close()
-
-		newDyn = DynModel("test_dyn")
-		newDyn._setName(mdl.name)
-		builder.append(newDyn)
-		builder.save("C:/Program Files (x86)/Steam/steamapps/common/War Thunder/content/base/res")
-
-		newDyn.computeData()
-		newDyn.mvd.computeData()
-	
-	models:list[RendInst] = []
-	# grp = GameResourcePack(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\content\base\res\locations.grp")
-	# models.append(grp.getResourceByName("tree_02_dstr"))
-	grp = GameResourcePack(r"D:\OldWindows\Users\Gredwitch\AppData\Local\Enlisted\content\base\res\halftrack_m13.grp")
-	mdl = grp.getResourceByName("halftrack_m13")
-
-	# mdl:RendInst = models[0] # DynModel("output/pzkpfw_IV_ausf_C.dyn")
-	mdl.computeData()
-	
-	mvd = mdl.mvd
-	mvd = mdl.skinnedMeshRes.mvd
-	# print(mvd)
-	mvd.computeData()
-
-	def findVertexData(mvd:MatVData, vdId:int, MAX_VERTEX:float, IGNORE_UV:bool, MAX_UV:float, STEP:int):
-		VD = MatVData.VertexData
-		FLOAT_VERTEX = VD.FLOAT_VERTEX
-		SHORT_VERTEX = VD.SHORT_VERTEX
-		PADDING = VD.PADDING
-		SHORT_UV = VD.SHORT_UV
-		FLOAT_UV = VD.FLOAT_UV
-		HALFFLOAT_UV = VD.HALFFLOAT_UV
-		NO_UV = VD.NO_UV
-
-		VF = [FLOAT_VERTEX(), SHORT_VERTEX()]
-
-		if IGNORE_UV:
-			VU = [NO_UV()]
-		else:
-			VU = [FLOAT_UV(), SHORT_UV()]
-
-		configs = []
-
-		for i in VF:
-			for j in VU:
-				configs.append([i, j])
-				configs.append([j, i])
-
-		def sizeofelem(el):
-			if type(el) == FLOAT_VERTEX:
-				return 12
-			if type(el) == FLOAT_UV:
-				return 8
-			elif type(el) == SHORT_VERTEX:
-				return 6
-			elif type(el) == SHORT_UV or type(el) == HALFFLOAT_UV:
-				return 4
-			elif type(el) == NO_UV:
-				return 0
-			else:
-				raise Exception(f"unknown type {el}")
-
-		def sizeof(cfg):
-			return sum(sizeofelem(e) for e in cfg)
-		
-		gvData = mvd.getGlobalVertexData(vdId)
-		vStride = gvData.getVertexStride()
-		vFormat = gvData.getStorageFormat()
-
-		def checkStupidity(numbers:tuple[tuple[float]], max:int):
-			for i in numbers:
-				for j in i:
-					if abs(j) > max:
-						return True
-
-			return False
-
-		def logOverride(*args):
-			pass
-
-		log.log = logOverride
-
-		for cfg in configs:
-			sz = sizeof(cfg)
-
-			if sz > vStride:
-				continue
-
-			maxPadding = vStride - sz
-
-			for frontPadding in range(0, maxPadding + 1, STEP):
-				maxInterPadding = maxPadding - frontPadding
-
-				for interPadding in range(0, maxInterPadding + 1, STEP):
-					endPadding = (maxPadding - frontPadding) - interPadding
-
-					string = f"vf{vFormat}-{vStride}_{frontPadding}_{cfg[0].__class__.__name__}_{interPadding}_{cfg[1].__class__.__name__}_{endPadding}"
-
-					fp = path.join("test", f"{mvd.name}_{vdId}_{string}")
-
-					if path.exists(f"{fp}.obj"):
-						print(f"Skipping existing {string}")
-
-						continue
-					elif path.exists(f"{fp}.ignore"):
-						print(f"Ignoring already stupid {string}")
-
-						continue
-					else:
-						print(f"test/{mvd.name}_{vdId}_{string}.obj")
-
-					MatVData.VertexData.FORMATS[vFormat][vStride] = (
-						PADDING(frontPadding), 
-						cfg[0], 
-						PADDING(interPadding), 
-						cfg[1],
-						PADDING(endPadding))
-					
-					vData = mvd.getVertexData(vdId)
-					
-					stupidVertex = checkStupidity(vData.getVertices(), MAX_VERTEX)
-					stupidUV = not IGNORE_UV and checkStupidity(vData.getUVs(), MAX_UV)
-
-					if (stupidUV or stupidVertex):
-						print(f"\tIgnoring stupid model {stupidVertex=} {stupidUV=}")
-
-						# file = open(f"{fp}.ignore", "w")
-						# file.write("IGNORE")
-						# file.close()
-
-						continue
-					
-					mvd.quickExportVDataToObj(vdId, f"_{string}", "test")
-
-	# print()
-	# mvd._setName("m13")
-	# findVertexData(mvd, 0, 10000, False, 2000, 1)
-	# mvd.save()
-	# print(mvd.getVertexDataOffset(2))
-	# mdl.mvd.quickExportVDataToObj(0)
-	# mvd.quickExportVDataToObj(2)

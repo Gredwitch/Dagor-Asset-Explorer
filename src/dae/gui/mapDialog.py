@@ -1,14 +1,13 @@
 
 from functools import partial
-from io import StringIO
 import sys
-from os import path, remove, mkdir
+from os import path, mkdir
 from traceback import format_exc
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 import util.log as log
-from PyQt5.QtWidgets import QDialog, QWidget, QPushButton, QLineEdit, QCheckBox, QGridLayout, QSizePolicy, QLabel, QFileDialog
+from PyQt5.QtWidgets import QWidget, QPushButton, QLineEdit, QCheckBox, QGridLayout, QSizePolicy, QLabel, QFileDialog
 from PyQt5.QtGui import QDropEvent
 from PyQt5.QtCore import pyqtSignal, QMimeData
 from PyQt5.uic import loadUi
@@ -269,7 +268,7 @@ class MapTab(QWidget):
 
 		return entities
 
-	def exportAssets(self, output:str, entities:dict[str, list]):
+	def exportAssetsFunc(self, output:str, entities:dict[str, list]):
 		outpath = makeOutputFolder(output, True, self.map.name + "_props")
 
 		log.log(f"Exporting {len(entities)} assets to {outpath}")

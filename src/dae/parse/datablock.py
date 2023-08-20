@@ -3,9 +3,9 @@ from os import path
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
+import util.log as log
 from util.fileread import *
 from struct import unpack
-import util.log as log
 from util.enums import *
 
 class DataBlock:
@@ -244,22 +244,3 @@ def loadDataBlock(file:BinFile):
 	
 	return sharedBlk
 
-
-if __name__ == "__main__":
-	file = open("dynModelDes.dat", "rb")
-	bf = BinFile(file.read())
-	file.close()
-	sblk = loadDataBlock(bf)
-	
-	blk = sblk.getByName("european_street_lamp_b_destr")#.getByName("matR")
-	# tex = blk.getByName("matR").getChildren()[0]
-
-	# for i in range(tex.getParamsCount()):
-	# 	print(tex.getParamById(i))
-		
-	# for k, v in enumerate(sblk.sharedNameMap):
-	# 	print(f"{k}: {v}")
-	# print(blk.debug())
-
-	for i in range(sblk.getblocksCount()):
-		print(sblk.getBlockName(i))

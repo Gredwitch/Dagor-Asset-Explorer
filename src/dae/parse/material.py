@@ -9,7 +9,6 @@ from util.terminable import Packed, Pack, SafeIter, SafeRange, SafeEnumerate, Sa
 from util.decompression import zstdDecompress, oodleDecompress, zlibDecompress, lzmaDecompress
 from util.enums import *
 from util.assetcacher import AssetCacher
-from pprint import pprint
 from struct import pack_into as packInto
 from struct import pack
 from ctypes import create_string_buffer

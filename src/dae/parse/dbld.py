@@ -5,22 +5,17 @@ from os import path, getcwd
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 
+import util.log as log
+import ctypes
 from util.fileread import *
 from util.decompression import CompressedData, zlibDecompress, zstdCompress, compressBlock
-# from math import * #acos, degrees
 from util.terminable import Exportable, Terminable, SafeRange
 from struct import unpack, pack
 from util.enums import *
-
-import util.log as log
 from parse.mesh import MatVData, ShaderMesh
-from parse.material import DDSx, MaterialData
+from parse.material import DDSx
 from parse.datablock import loadDataBlock
-from pprint import pprint
-
-from util.misc import loadDLL, matrix_mul
-import json
-import ctypes
+from util.misc import loadDLL, matrixMul
 
 intrinsics = loadDLL("dae_intrinsics.dll")
 get_v482 = intrinsics.get_v482
@@ -28,21 +23,6 @@ get_v482 = intrinsics.get_v482
 get_v482.argtypes = (ctypes.POINTER(ctypes.c_float), ctypes.c_float, ctypes.c_int)
 get_v482.restype = None
 
-# getPos = intrinsics.getPos
-# getPos.argtypes = (
-# 	ctypes.POINTER(ctypes.c_float * 4),  # dst
-# 	ctypes.c_int,  # x
-# 	ctypes.c_int,  # z
-# 	ctypes.c_int,  # htDelta
-# 	ctypes.c_float,  # grid2world
-# 	ctypes.c_float,  # cell_xz_sz
-# 	ctypes.c_int,  # cellSz
-# 	ctypes.POINTER(ctypes.c_float * 4),  # cellOrigin
-# 	ctypes.c_int,  # htMin
-# 	ctypes.POINTER(ctypes.c_int * 4),  # v110
-# 	ctypes.POINTER(ctypes.c_int * 4),  # v112
-# 	ctypes.POINTER(ctypes.c_int * 4),  # v114
-# )
 
 def formatMagic(magic:bytes):
 	return magic.decode("utf-8").replace("\x00", "")
@@ -624,7 +604,7 @@ class DagorBinaryLevelData(Exportable):
 									
 									matrix.append((0, 0, 0, 1))
 
-									matrix = matrix_mul(scaleFix, matrix)
+									matrix = matrixMul(scaleFix, matrix)
 
 									entTab.append(((pos[0], pos[2], pos[1]), matrix))
 
@@ -728,8 +708,9 @@ class DagorBinaryLevelData(Exportable):
 					sz1 = readInt(file)
 					sz2 = readInt(file)
 					
-
-					return DDSx(self.filePath, f"{self.name}_lcls_{idx}", file = file.readBlock(sz1).read())
+					ddsblck = file.readBlock(sz1)
+					hdr = DDSx.Header(ddsblck)
+					return DDSx(self.filePath, name = f"{self.name}_lcls_{idx}", dataOffset = ddsblck.absTell(), header = hdr)
 
 			def __repr__(self):
 				return f"<LandMeshManager texCnt={self.texCnt} matCnt={self.matCnt} vdataCnt={self.vdataCnt}>"
@@ -958,7 +939,10 @@ class DagorBinaryLevelData(Exportable):
 
 			texIDs = unpack("I" * texNum, file.read(4 * texNum))
 
-			mvd = MatVData(self.filePath, BinFile(CompressedData(file).decompress()), texNum, matNum, self.name + "_scn")
+			mvd = MatVData(BinFile(CompressedData(file).decompress()), 
+		  				texCnt = texNum, 
+						matCnt = matNum, 
+						name = self.name + "_scn")
 			rest = BinFile(zlibDecompress(file.read(file.getSize() - file.tell())))
 
 			self.sceneMVD = mvd
@@ -1510,201 +1494,3 @@ class LandClass(Exportable): # landclasses used to automatically generated plant
 
 		log.subLevel()
 
-
-if __name__ == "__main__":
-	# import gameres
-	import os
-	# from assetcacher import ASSETCACHER
-
-	# map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_urban_area_2x2.bin")
-	# map = DagorBinaryLevelData("D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\battle_of_berlin_opera.bin")
-	map = DagorBinaryLevelData("C:\\Program Files (x86)\\Steam\\steamapps\\common\\War Thunder\\levels\\avg_normandy.bin")
-
-	# primData = None
-	# toReplace = "D:\\OldWindows\\Users\\Gredwitch\\AppData\\Local\\Enlisted\\content\\base\\levels\\normandy_coastal_area_1x1.bin"
-	# primData = map.replaceRIGz(toReplace, primData)
-	# map.replaceRIGzLayerContents(toReplace, primData)
-
-	def exportRiGen(map:DagorBinaryLevelData, write:bool = True, enlisted:bool = False, vegetation:bool = True, cells:tuple = None):
-		entities = {}
-		riGen = map.riGenLayers[0]
-
-		for ofs in riGen.riDataRel:
-			cell = riGen.riDataRel[ofs]
-			
-			if cells is not None and cell.id not in cells:
-				continue
-
-			riGen.getCellEntities(cell.id, entities, enlisted, vegetation)
-			
-		if write:
-			file = open("samples/rigen.json", "w")
-			file.write(json.dumps(entities, indent = 4))
-			file.close()
-
-			log.log("Wrote samples/rigen.json")
-
-		return entities
-
-	def exportEnts(map:DagorBinaryLevelData, entities):
-		gameRes:list[gameres.GameResourcePack] = []
-		
-		path = "C:/Program Files (x86)/Steam/steamapps/common/War Thunder/content/base/res/"
-		# path = "D:/OldWindows/Users/Gredwitch/AppData/Local/Enlisted/content/base/res/"
-
-		log.log(f"Loading GRP from {path}")
-		log.addLevel()
-
-		for file in os.listdir(path):
-			if os.path.splitext(file)[1] == ".grp":
-				gameRes.append(gameres.GameResourcePack(path + file))
-
-		log.subLevel()
-
-		for ent in entities:
-			if os.path.exists(f"samples/{ent}_0.obj"):
-				log.log(f"Skipping already exported model {ent}", LOG_WARN)
-
-				continue
-			
-			rrd = None
-
-			for grp in gameRes:
-				try:
-					rrd = grp.getResourceByName(ent)
-					break
-				except:
-					pass
-			
-			if rrd is None:
-				log.log(f"Could not find {ent} from our loaded gamerespacks", LOG_ERROR)
-				# raise Exception(f"Could not find {ent} from our loaded gamerespacks")
-
-				continue
-
-			level = log.curLevel
-			try:
-				ri = rrd.getChild()
-			except:
-				log.log(f"Failed to load RendInst {ent}", LOG_ERROR)
-				log.curLevel = level
-
-				continue
-
-
-			if isinstance(ri, gameres.RendInst):
-				try:
-					ri.exportObj(0, "samples")
-				except:
-					log.log(f"Failed to export {ent}", LOG_ERROR)
-			else:
-				log.log(f"Ignoring entity {ent}: rrd child returned a {ri}")
-
-	
-	map.computeData()
-	
-	riGen = map.riGenLayers[0]
-	# print(riGen.cellCnt)
-
-	from pprint import pprint
-	data = []
-	for ofs in riGen.riDataRel:
-		cell = riGen.riDataRel[ofs]
-
-		entities = {}
-		riGen.getCellEntities(cell.id, entities, False, False)
-		data.append((riGen.getCellXY(cell), len(entities)))
-		pprint(entities["normandy_village_shed_b"])
-
-		break
-	
-	# entities = exportRiGen(map, write = True, enlisted = True, vegetation = False, cells = (528, ))
-	# exportEnts(map, entities)
-	
-	log.log("Done")
-
-	"""
-import bpy
-import bmesh
-from json import loads
-from mathutils import Vector, Matrix
-
-MERGE_DISTANCE = 0.001
-DECIMATE_RATIO = 0.4
-
-def placeInstances(riGen, entities):
-    for entIdx, ent in enumerate(entities):
-        transformTab = riGen[ent]
-        selected_object = entities[ent]
-        
-        for k, transform in enumerate(transformTab):
-            print(f"[D] [{entIdx + 1}/{len(entities)}]: {ent} - Processing {k + 1}/{len(transformTab)}") 
-            
-            new_object = selected_object.copy()
-            new_object.data = selected_object.data.copy()
-            
-            new_object.matrix_world @= Matrix(transform[1])
-            new_object.location = Vector(transform[0])
-            
-            bpy.context.collection.objects.link(new_object)
-        
-        bpy.data.objects.remove(selected_object)
-
-def optimizeObject(obj):
-    print("[D] \tOptimizing")
-    
-    bpy.context.view_layer.objects.active = obj
-    
-    bpy.ops.object.mode_set(mode = "EDIT")
-    
-    bm = bmesh.from_edit_mesh(obj.data)
-    bmesh.ops.remove_doubles(bm, verts = bm.verts, dist = MERGE_DISTANCE)
-    bmesh.update_edit_mesh(obj.data)
-    
-    bpy.ops.object.mode_set(mode = "OBJECT")
-    
-    decimateMod = obj.modifiers.new(name = "Decimate", type = "DECIMATE")
-    decimateMod.ratio = DECIMATE_RATIO
-    
-    bpy.ops.object.modifier_apply(modifier = decimateMod.name)
-    
-
-def loadEntities(riGen, path:str):
-    entities = {}
-
-    for k, ent in enumerate(riGen):
-        print(f"Loading entity {k + 1}/{len(riGen)}")
-        
-        if len(riGen[ent]) == 0:
-            print(f"[D] \tSkipping {ent}")
-            
-            continue
-        
-        try:
-            imported_object = bpy.ops.import_scene.obj(filepath = f"{path}/{ent}_0.obj")
-            selected_object = bpy.context.selected_objects[0]
-            
-            entities[ent] = selected_object
-        except Exception as e:
-            print(f"[E] \tFailed to import {ent}: {e}")
-            
-            continue
-        
-            
-        optimizeObject(entities[ent])
-    
-    return entities
-
-def loadRiGen(path:str):
-    file = open(f"{path}/rigen.json", "rb")
-    riGen = loads(file.read())
-    file.close()
-
-    entities = loadEntities(riGen, path)
-    placeInstances(riGen, entities)
-    
-    bpy.context.view_layer.update()
-
-
-loadRiGen("C:/Users/Gredwitch/Documents/WTBS/DagorAssetExplorer/samples")
-	"""

@@ -4,18 +4,12 @@ from os import path, getcwd
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 import util.log as log
-# from math import *
 from struct import unpack
 from util.fileread import *
 from util.terminable import SafeRange, Terminable, FilePathable, SafeIter, SafeEnumerate
 from util.enums import *
 from parse.material import MaterialData
 from abc import ABC, abstractmethod
-
-# from misc import pprint, loadDLL
-# from assetcacher import ASSETCACHER
-# import pygltflibo
-# from traceback import print_exc as trace
 
 
 class ShaderMesh(Terminable):
@@ -792,11 +786,3 @@ class MatVData(Terminable, FilePathable): # stores material and vertex data :D
 	@property
 	def hasMaterials(self):
 		return self.__hasMaterials
-
-if __name__ == "__main__":
-	from util.decompression import CompressedData
-	file = BinFile("pilot_china1.rrd")
-	file.seek(1512, 0)
-
-	mvd = MatVData(CompressedData(file).decompressToBin(), filePath = "pilot_china1.rrd")
-	mvd.quickExportVDataToObj(1)

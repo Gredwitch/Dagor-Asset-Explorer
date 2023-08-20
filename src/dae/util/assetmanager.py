@@ -6,13 +6,9 @@ sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 import util.log as log
 from parse.gameres import *
-# from parse.mesh import MatVData
 from parse.material import DDSx, DDSxTexturePack2
-# from parse.sound import FModBank, FModFSB
-
 from util.enums import *
 from util.terminable import Exportable
-# from settings import settings
 
 def extend(d:dict, key, value):
 	d[key] = value
@@ -34,10 +30,6 @@ class AssetManager:
 	@classmethod
 	def isOpenable(cls, suffix:str):
 		return suffix in cls.__OPENABLE_EXTENSIONS
-	
-	# @classmethod
-	# def getNiceName(cls, suffix:str):
-	# 	return cls.__EXTENSIONS[suffix]
 	
 	@classmethod
 	def getOpenableFiles(cls):

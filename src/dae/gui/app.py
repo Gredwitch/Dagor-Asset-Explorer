@@ -6,16 +6,16 @@ sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 import util.log as log
 import gc
-# from PyQt5 import uic, QtWidgets, QtCore, QtGui
 from PyQt5.uic import loadUi
 from PyQt5.QtCore import pyqtSignal, QDir, QFileInfo, QDirIterator, QRunnable, QThreadPool, QObject
 from PyQt5.QtWidgets import QMainWindow, QGridLayout, QAction, QFileDialog, QApplication
 from PyQt5.QtGui import QIcon, QStandardItem
-from gui.customtreeview import CustomTreeView, AssetItem, FolderItem
+from gui.customtreeview import CustomTreeView, AssetItem, FolderItem, SimpleItem
 from gui.progressDialog import ProgressDialog, BusyProgressDialog, MessageBox
 from gui.mapDialog import MapTab
 from util.misc import openFile, getResPath, getUIPath
 from util.assetmanager import AssetManager
+from util.settings import SETTINGS
 from parse.gameres import GameResDesc
 from parse.realres import GeomNodeTree, DynModel, RendInst, CollisionGeom
 from parse.material import DDSx
@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
 	taskStatus = pyqtSignal(str)
 	taskTitle = pyqtSignal(str)
 	dialogClosed = pyqtSignal(bool)
+	itemsCreated = pyqtSignal()
 
 	gridLayout:QGridLayout
 	treeView:CustomTreeView
@@ -82,6 +83,8 @@ class MainWindow(QMainWindow):
 	actionUnmount:QAction
 	actionClose:QAction
 	actionSettings:QAction
+	actionCollapse:QAction
+	actionExpand:QAction
 	# actionOpenMap:QAction
 
 	mapTab:MapTab
@@ -103,12 +106,16 @@ class MainWindow(QMainWindow):
 		# self.actionOpenMap.triggered.connect(self.openMap)
 		self.actionUnmount.triggered.connect(self.unmountAssets)
 		self.actionSettings.triggered.connect(self.openSettings)
+		self.actionExpand.triggered.connect(self.treeView.expandAll)
+		self.actionCollapse.triggered.connect(self.treeView.collapseAll)
+		self.itemsCreated.connect(self.treeView.expandAll)
 
 		self.threadPool = QThreadPool()
 		self.activeTerminable:Terminable = None
 		self.activeSubProcess = None
 		self.shouldTerminate = False
 		self.treeView.mainWindow = self
+		self.__taskStatus:str = ""
 
 		self.cachedIcons:dict[str:QIcon] = {}
 
@@ -187,10 +194,6 @@ class MainWindow(QMainWindow):
 		self.mapTab.mapLoadFinished(map, cellData)
 	
 	def mountAssets(self, paths:list[str]):
-		# self.activeThread = QRunnable(partial(self.__mountAssetsInternal__, paths))
-		# thread = threading.Thread(target = partial(self.__mountAssetsInternal__, paths))
-		# thread.start()
-		# self.threadPool.start(self.activeThread)
 		self.threadPool.start(partial(self.__mountAssetsInternal__, paths))
 	
 	def __mountAssetsInternal__(self, paths:list[str]):
@@ -198,10 +201,14 @@ class MainWindow(QMainWindow):
 		
 		self.setTaskTitle("Mounting assets")
 		self.setTaskStatus("Loading files...")
-
+	
 		for p in paths:
 			self.exploreFileInfo(QFileInfo(p), self.treeView.treeModel)
 
+		if SETTINGS.getValue(SETTINGS_EXPAND_ALL):
+			self.setTaskStatus("Expanding items...")
+			self.itemsCreated.emit()
+		
 		self.setRequestedDialog(DIALOG_NONE)
 	
 	def setRequestedDialog(self, rType:int):
@@ -214,7 +221,13 @@ class MainWindow(QMainWindow):
 		self.taskProgress.emit(progress)
 
 	def setTaskStatus(self, status:str):
+		self.__taskStatus = status
+
 		self.taskStatus.emit(status)
+	
+	
+	def getTaskStatus(self):
+		return self.__taskStatus
 	
 	def setTerminable(self, ter:Terminable):
 		self.activeTerminable = ter
@@ -450,7 +463,7 @@ class MapExportThread(QRunnable):
 			
 			if mapTab.exportAssets.isChecked():
 				mainWindow.setTaskStatus("Exporting assets")
-				mapTab.exportAssets(output, entities)
+				mapTab.exportAssetsFunc(output, entities)
 			
 			mainWindow.setTaskProgress(1.0)
 			

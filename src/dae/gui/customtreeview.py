@@ -3,14 +3,14 @@ from os import path, system, mkdir, makedirs, replace, listdir, rmdir
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
+import shutil
 import util.log as log
 from PyQt5.QtWidgets import QAbstractItemView, QTreeView, QLineEdit, QHeaderView, QMenu, QAction, QStyledItemDelegate, QFileDialog, QMainWindow
-from PyQt5.QtCore import pyqtSignal, QMimeData, Qt, QSortFilterProxyModel, QPoint, QFileInfo
+from PyQt5.QtCore import QMimeData, Qt, QSortFilterProxyModel, QPoint, QFileInfo
 from PyQt5.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QStandardItemModel, QStandardItem, QIcon, QPaintEvent, QPainter
 from util.misc import formatBytes, getResPath, openFile, ROOT_FOLDER, LIB_FOLDER
 from util.terminable import Exportable, Packed, Pack, Terminable
 from util.enums import *
-from abc import abstractmethod
 from pyperclip import copy as copyToClipboard
 from functools import partial
 from parse.material import DDSx, DDSxTexturePack2
@@ -21,8 +21,6 @@ from gui.progressDialog import MessageBox
 from util.settings import SETTINGS
 from subprocess import Popen
 from glob import glob
-import shutil
-# from gui.previewDialog import PreviewDialog
 
 
 FOLDER_ICO_PATH = getResPath("folder.bmp")
@@ -84,8 +82,11 @@ class SimpleItem:
 				try:
 					# menu.addAction(PreviewModel(menu, self, 0))
 
-					menu.addAction(ExportToDMF(menu, self, 0))
-
+					if isinstance(asset, GeomNodeTree):
+						menu.addAction(ExportSkeletonToDMF(menu, self, 0))
+					else:
+						menu.addAction(ExportToDMF(menu, self, 0))
+					
 					if isinstance(asset, RendInst):
 						menu.addAction(ExportToSource(menu, self, 0))
 						menu.addAction(ExportToOBJ(menu, self, 0))
@@ -123,7 +124,14 @@ class SimpleItem:
 					menu.addAction(ExportAllToDMF(menu, self))
 					menu.addAction(ExportAllToOBJ(menu, self))
 					# menu.addAction(ExportAllLODsToOBJ(menu, self))
-			
+	
+	def autoExpand(self):
+		if SETTINGS.getValue(SETTINGS_EXPAND_ALL):
+			self.expand()
+
+	def expand(self):
+		treeView:CustomTreeView = self.mainWindow.treeView
+		treeView.expand(self.mainItem.index())
 
 	def getRow(self):
 		return (self.mainItem, self.fileType, None)
@@ -150,6 +158,11 @@ class AssetItem(SimpleItem):
 		
 		self.asset = asset
 	
+
+	def expand(self):
+		treeView:CustomTreeView = self.mainWindow.treeView
+		treeView.expandRecursively(self.mainItem.index())
+
 	def hasParent(self):
 		return self.parentPackage is not None
 
@@ -175,15 +188,13 @@ class FolderItem(SimpleItem):
 		   FolderItem.__TYPE, 
 		   FolderItem.__ICON)
 
-
-
 class CustomAction(QAction):
 	def __init__(self, parent, item:SimpleItem):
 		super().__init__(parent)
 
-		self.setText(self.actionText)
-
 		self.__item = item
+
+		self.setText(self.actionText)
 
 		self.triggered.connect(self.run)
 	
@@ -191,18 +202,16 @@ class CustomAction(QAction):
 	def item(self):
 		return self.__item
 
-	@abstractmethod
 	def run(self):
-		...
+		raise NotImplementedError()
 	
 	@property
 	def mainWindow(self):
 		return self.item.mainWindow
 
 	@property
-	@abstractmethod
 	def actionText(self) -> str:
-		...
+		raise NotImplementedError()
 
 class ThreadedAction(CustomAction):
 	def __init__(self, parent, item:SimpleItem):
@@ -216,15 +225,13 @@ class ThreadedAction(CustomAction):
 		self.__cancel = False
 	
 	@property
-	@abstractmethod
 	def taskTitle(self) -> str:
-		...
+		raise NotImplementedError()
 	
 	@classmethod
 	@property
-	@abstractmethod
 	def dialogType(self) -> int:
-		...
+		raise NotImplementedError()
 
 	def setTerminable(self, ter:Terminable):
 		self.item.mainWindow.setTerminable(ter)
@@ -252,6 +259,10 @@ class ThreadedAction(CustomAction):
 
 	def setTaskStatus(self, text:str):
 		self.mainWindow.setTaskStatus(text)
+	
+	@property
+	def taskStatus(self) -> str:
+		return self.mainWindow.getTaskStatus()
 
 	def setTaskProgress(self, progress:float):
 		self.mainWindow.setTaskProgress(progress * 100)
@@ -337,6 +348,8 @@ class CopyNameToClipboard(CustomAction):
 
 
 class SaveAction(ThreadedAction):
+	item:AssetItem
+
 	def preRun(self):
 		if SETTINGS.getValue(SETTINGS_OUTPUT_FOLDER):
 			self.output = ROOT_FOLDER
@@ -360,9 +373,8 @@ class SaveAction(ThreadedAction):
 	def dialogType(self) -> int:
 		return DIALOG_PROGRESS
 	
-	@abstractmethod
 	def save(self, output:str):
-		...
+		raise NotImplementedError()
 	
 	def makeOutputFolder(self, shouldMakeFolder:bool, folderName:str):
 		if not shouldMakeFolder:
@@ -375,10 +387,91 @@ class SaveAction(ThreadedAction):
 		
 		return self.output
 
+class AssetSaveAction(SaveAction):
+	def saveSingle(self, output:str, asset):
+		if self.handleTermination(asset):
+			return True
+		
+		level = log.curLevel
 
-class Extract(SaveAction):
-	item:AssetItem
+		log.log(self.taskStatus)
+		log.addLevel()
 
+		try:
+			self.saveAsset(output, asset)
+
+			log.subLevel()
+		except Exception as e:
+			print(format_exc())
+
+			self.setErrored()
+
+			log.subLevel(log.curLevel - level)
+
+		return False
+	
+	def saveAsset(self, output:str, asset):
+		raise NotImplementedError()
+	
+	def save(self, output:str):
+		asset:Packed = self.item.asset
+		
+		self.saveSingle(output, asset)
+
+		self.setTaskProgress(1)
+
+class PackedSave(AssetSaveAction):
+	def save(self, output:str):
+		asset:Pack = self.item.asset
+
+		output = self.makePackedOutputFolder(asset.name)
+		
+		self.setTerminable(asset)
+
+		packedFiles = asset.getPackedFiles()
+
+		if self.hasFilter:
+			fileCnt = 0
+
+			for v in packedFiles:
+				if self.filter(v):
+					fileCnt += 1
+		else:
+			fileCnt = len(packedFiles)
+
+		k = 0
+
+		for v in packedFiles:
+			if self.hasFilter and not self.filter(v):
+				continue
+
+			self.setTaskStatus(f"{self.getProgressText(v)} ({k + 1}/{fileCnt})")
+
+			if self.saveSingle(output, v):
+				break
+				
+			self.setTaskProgress((k + 1) / fileCnt)
+
+			k += 1
+		
+		self.clearTerminable()
+	
+	@classmethod
+	@property
+	def hasFilter(cls):
+		return False
+
+	def filter(self, asset):
+		return True
+	
+	def getProgressText(self, asset:Packed) -> str:
+		raise NotImplementedError()
+	
+	def makePackedOutputFolder(self, name:str):
+		return self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXPORT_FOLDER), name)
+
+
+class Extract(AssetSaveAction):
 	@property
 	def actionText(self) -> str:
 		return "Extract"
@@ -387,20 +480,10 @@ class Extract(SaveAction):
 	def taskTitle(self) -> str:
 		return f"Extracting {self.item.asset.name}.{self.item.asset.fileExtension}"
 
-	def save(self, output:str):
-		asset:Packed = self.item.asset
-
-		self.setTerminable(asset)
-		
+	def saveAsset(self, output:str, asset:Packed):
 		asset.save(output)
 
-		self.clearTerminable()
-
-		self.setTaskProgress(1)
-
-class ExtractAll(SaveAction):
-	item:AssetItem
-
+class ExtractAll(Extract, PackedSave):
 	@property
 	def actionText(self) -> str:
 		return "Extract all"
@@ -409,32 +492,14 @@ class ExtractAll(SaveAction):
 	def taskTitle(self) -> str:
 		return f"Extracting files from {self.item.asset.name}.{self.item.asset.fileExtension}"
 	
-	def save(self, output:str):
-		asset:Pack = self.item.asset
+	def makePackedOutputFolder(self, name:str):
+		return self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXTRACT_FOLDER), name)
 
-		output = self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXTRACT_FOLDER), asset.name)
-		
-		self.setTerminable(asset)
-
-		packedFiles = asset.getPackedFiles()
-		fileCnt = len(packedFiles)
-
-		for k, v in enumerate(packedFiles):
-			if self.handleTermination(v):
-				break
-			
-			self.setTaskStatus(f"Extracting {v.name}.{v.fileExtension}... ({k + 1}/{fileCnt})")
-
-			v.save(output)
-
-			self.setTaskProgress((k + 1) / fileCnt)
-		
-		self.clearTerminable()
+	def getProgressText(self, asset:Packed):
+		return f"Extracting {asset.name}.{asset.fileExtension}"
 
 
-class ExportToDDS(SaveAction):
-	item:AssetItem
-
+class ExportToDDS(Extract):
 	@property
 	def actionText(self) -> str:
 		return "Export to DDS"
@@ -443,19 +508,10 @@ class ExportToDDS(SaveAction):
 	def taskTitle(self) -> str:
 		return f"Exporting to {self.item.asset.name}.dds"
 
-	def save(self, output:str):
-		asset:DDSx = self.item.asset
-		self.setTerminable(asset)
-		
+	def saveAsset(self, output:str, asset:DDSx):
 		asset.exportDDS(output)
 
-		self.clearTerminable()
-
-		self.setTaskProgress(100)
-
-class ExportAllToDDS(SaveAction):
-	item:AssetItem
-
+class ExportAllToDDS(ExportToDDS, PackedSave):
 	@property
 	def actionText(self) -> str:
 		return "Export all to DDS"
@@ -463,44 +519,10 @@ class ExportAllToDDS(SaveAction):
 	@property
 	def taskTitle(self) -> str:
 		return f"Exporting files from {self.item.asset.name}.{self.item.asset.fileExtension} to DDS"
+
+	def getProgressText(self, asset:Packed):
+		return f"Extracting {asset.name}.dds"
 	
-	def save(self, output:str):
-		asset:DDSxTexturePack2 = self.item.asset
-		output = self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXPORT_FOLDER), asset.name)
-		self.setTerminable(asset)
-
-		packedFiles = asset.getPackedFiles()
-		fileCnt = len(packedFiles)
-
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-
-		for k, v in enumerate(packedFiles):
-			if self.handleTermination(v):
-				break
-
-			self.setTaskStatus(f"Exporting {v.name}.dds... ({k + 1}/{fileCnt})")
-
-			level = log.curLevel
-			
-			log.log(f"Exporting {v.name}.dds... ({k + 1}/{fileCnt})")
-			log.addLevel()
-
-			try:
-				v.exportDDS(output)
-
-				log.subLevel()
-			except Exception as e:
-				print(format_exc())
-
-				self.setErrored()
-
-				log.subLevel(log.curLevel - level)
-
-			log.subLevel()
-
-			self.setTaskProgress((k + 1) / fileCnt)
-		
-		self.clearTerminable()
 
 class PreviewModel(CustomAction):
 	def __init__(self, parent, item: SimpleItem, lod:int):
@@ -534,14 +556,12 @@ class PreviewModel(CustomAction):
 
 
 
-class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
+class ExportToSource(SaveAction):
 	def __init__(self, parent, item: SimpleItem, lod:int):
 		self.lod = lod
 
 		super().__init__(parent, item)
 	
-	item:AssetItem
-
 	@property
 	def actionText(self) -> str:
 		return f"Export LOD {self.lod} to Source engine"
@@ -571,7 +591,7 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 		if self.handleTermination(asset):
 			return
 		
-		smdl = asset.getSourceModel(self.lod)
+		smdl = asset.getSourceModel(self.lod, exportLODs = self.exportLODs)
 		self.setTaskProgress(1/stepCnt)
 		
 		if self.handleTermination(smdl):
@@ -706,7 +726,15 @@ class ExportToSource(SaveAction): # TODO make a base Export class, ExportAllLODs
 			log.subLevel()
 			self.setTaskProgress(5/stepCnt)
 
-class ExportLODsToSource(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
+	@classmethod
+	@property
+	def exportLODs(cls):
+		return False
+
+class ExportLODsToSource(ExportToSource):
+	def __init__(self, parent, item:SimpleItem):
+		super().__init__(parent, item, 0)
+	
 	item:AssetItem
 
 	@property
@@ -717,399 +745,147 @@ class ExportLODsToSource(SaveAction): # TODO make a base Export class, ExportAll
 	def taskTitle(self) -> str:
 		return f"Exporting all LODs from {self.item.asset.name} to Source engine"
 
-	def save(self, output:str):
-		modelPath = "dae_out"
-		asset:RendInst = self.item.asset
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-		exportToGame = SETTINGS.getValue(SETTINGS_EXPORT_GAMEINFO)
-		exportCollisionModel = SETTINGS.getValue(SETTINGS_STUDIOMDL_EXPORT_COLLISION)
-		exportSMDs = SETTINGS.getValue(SETTINGS_EXPORT_SMD)
-		dontCompile = SETTINGS.getValue(SETTINGS_NO_MDL)
-		dontReplaceTex = SETTINGS.getValue(SETTINGS_DONT_EXPORT_EXISTING_TEXTURES)
-		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
+	@classmethod
+	@property
+	def exportLODs(cls):
+		return True
 
-		if exportTex:
-			stepCnt = 5
-		else:
-			stepCnt = 3
-		
-		self.setTaskStatus("Generating model data")
-
-		if self.handleTermination(asset):
-			return
-		
-		smdl = asset.getSourceModel(0, exportLODs = True)
-		self.setTaskProgress(1/stepCnt)
-
-		if self.handleTermination(smdl):
-			return
-		
-		self.setTaskStatus("Exporting model data to QC, SMD and VMT")
-		qc, texturePaths = smdl.export(output, modelPath, exportCollisionModel, exportSMDs)
-		self.setTaskProgress(2/stepCnt)
-		self.clearTerminable()
-
-		if self.shouldTerminate:
-			return
-		
-		
-		gamePath = path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH))
-
-		output = path.join(output, smdl.name)
-		sourceExport = path.join(output, "source_export")
-
-		makedirs(sourceExport, exist_ok = True)
-
-		if exportSMDs and not dontCompile:
-			self.setTaskStatus("Compiling")
-
-			pipes = Popen([
-				SETTINGS.getValue(SETTINGS_STUDIOMDL_PATH), 
-				"-nop4", 
-				"-verbose", 
-				"-game", 
-				path.dirname(SETTINGS.getValue(SETTINGS_GAMEINFO_PATH)), 
-				qc])
-			
-			self.setSubProcess(pipes)
-
-			if pipes.wait() != 0:
-				raise Exception(f"Compile failed: return code {pipes.returncode}")
-			
-			self.clearSubProcess()
-
-			if not exportToGame:
-				modelOutPath = path.join(sourceExport, f"models/{modelPath}")
-
-				makedirs(modelOutPath, exist_ok = True)
-				
-				files = glob(path.join(gamePath, f"models/{modelPath}/{asset.name}.*"))
-
-				for f in files:
-					log.log(f"Moving {f} to {modelOutPath}")
-					replace(f, path.join(modelOutPath, path.basename(f)))
-			
-		self.setTaskProgress(3/stepCnt)
-
-		if exportTex and texturePaths is not None:
-			self.setTaskStatus("Exporting textures")
-			log.addLevel()
-			mdl = smdl.model
-
-			if self.handleTermination(mdl):
-				return
-			
-			mdl.exportTextures(output, texturePaths = texturePaths, forceConvert = forceConvert)
-
-			self.clearTerminable()
-			log.subLevel()
-
-			self.setTaskProgress(4/stepCnt)
-			self.setTaskStatus("Converting textures to VTF")
-			log.addLevel()
-
-			materialsPath = path.join(sourceExport, "materials")
-
-			texDict = texturePaths.getDict()
-
-			for k, texName in enumerate(texDict.keys()):
-				if self.shouldTerminate:
-					return
-				
-				texFile = path.join(output, f"textures/{texName}.dds")
-
-				if not path.exists(texFile):
-					log.log(f"Skipping missing texture {texName}")
-
-					continue
-				
-				tex = texturePaths.get(texName)
-
-				texOutPath = path.normpath(path.join(materialsPath, tex.texPath))
-
-				if dontReplaceTex and path.exists(path.join(texOutPath, f"{texName}.vtf")):
-					log.log(f"Skipping already exported texture {texName}")
-
-					continue
-
-				makedirs(texOutPath, exist_ok = True)
-
-				pipes = Popen((
-					VTFCMD_PATH,
-					"-file",
-					path.normpath(texFile),
-					"-output",
-					texOutPath
-				))
-
-				pipes.wait()
-
-				self.setTaskProgress((4 + (k + 1) / len(texDict))/stepCnt)
-
-			if exportToGame and path.exists(materialsPath):
-				log.log("Moving materials directory...")
-
-				shutil.copytree(materialsPath, path.join(gamePath, "materials"), dirs_exist_ok = True)
-				shutil.rmtree(materialsPath)
-			
-
-			if len(listdir(sourceExport)) == 0:
-				rmdir(sourceExport)
-
-			log.subLevel()
-			self.setTaskProgress(5/stepCnt)
-
-
- 
-class ExportToDMF(SaveAction): # TODO make a base Export class, ExportAllLODs, ExportAll
-	def __init__(self, parent, item: SimpleItem, lod:int):
+class ExportModel(AssetSaveAction):
+	def __init__(self, parent, item:SimpleItem, lod:int = 0):
 		self.lod = lod
-
+		
 		super().__init__(parent, item)
-	
-	item:AssetItem
 
-	@property
-	def actionText(self) -> str:
-		return f"Export LOD {self.lod} to DMF"
-	
-	@property
-	def taskTitle(self) -> str:
-		if isinstance(self.item.asset, GeomNodeTree):
-			return f"Exporting skeleton to {self.item.asset.name}.dmf"
-		else:
-			return f"Exporting LOD to {self.item.asset.getExportName(self.lod)}.dmf"
-
-	def save(self, output:str):
-		asset:RendInst = self.item.asset
+	def saveAsset(self, output:str, asset:RendInst):
 		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
 		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
-		
-		
-		self.setTerminable(asset)
+
 		mdl = asset.getModel(self.lod)
-		self.setTerminable(mdl)
-		mdl.exportDmf(output, exportTex, forceConvert)
-		self.clearTerminable()
+
+		if self.handleTermination(mdl):
+			return
 		
-
-		self.setTaskProgress(1)
- 
-class ExportLODsToDMF(SaveAction):
-	item:AssetItem
-
+		getattr(mdl, self.exportMethodName)(output, exportTex, forceConvert)
+	
 	@property
 	def actionText(self) -> str:
-		return "Export all LODs to DMF"
+		return f"Export LOD {self.lod} to {self.exportFormat.upper()}"
 	
 	@property
 	def taskTitle(self) -> str:
-		return f"Exporting all LODs from {self.item.asset.name} to DMF"
+		return f"Exporting LOD to {self.item.asset.getExportName(self.lod)}.{self.exportFormat}"
+		
+	@classmethod
+	@property
+	def exportMethodName(cls) -> str:
+		raise NotImplementedError()
+	
+	@classmethod
+	@property
+	def exportFormat(cls) -> str:
+		raise NotImplementedError()
 
+class ExportLODs(PackedSave, ExportModel):
+	@property
+	def actionText(self) -> str:
+		return f"Export all LODs to {self.exportFormat.upper()}"
+	
+	@property
+	def taskTitle(self) -> str:
+		return f"Exporting all LODs from {self.item.asset.name} to {self.exportFormat.upper()}"
+	
 	def save(self, output:str):
 		asset:RendInst = self.item.asset
+
+		output = self.makePackedOutputFolder(asset.name)
+
 		self.setTerminable(asset)
 		asset.computeData()
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
 
 		for i in range(asset.lodCount):
-			if self.handleTermination(asset):
-				break
-			
-			self.setTerminable(asset)
-			mdl = asset.getModel(i)
-			self.setTerminable(mdl)
-			mdl.exportDmf(output, exportTex, forceConvert)
+			self.setTaskStatus(f"{self.getProgressText(asset)} LOD {i}/{asset.lodCount - 1}")
 
+			self.lod = i
+
+			if self.saveSingle(output, asset):
+				break
 
 			self.setTaskProgress((i + 1) / asset.lodCount)
-		
+
 		self.clearTerminable()
 
-class ExportAllToDMF(SaveAction):
-	item:AssetItem
+	def getProgressText(self, asset:Packed):
+		return f"Exporting {asset.name}"
+
+class ExportAllModels(PackedSave, ExportModel):
+	@classmethod
+	@property
+	def hasFilter(cls):
+		return True
+
+	def filter(self, asset):
+		return isinstance(asset, RendInst)
+
+	def getProgressText(self, asset:RendInst):
+		return f"Exporting {asset.getExportName(0)}.{self.exportFormat}"
 
 	@property
 	def actionText(self) -> str:
-		return "Export all models to LOD 0 DMF"
+		return f"Export all models to LOD 0 {self.exportFormat.upper()}"
 	
 	@property
 	def taskTitle(self) -> str:
-		return f"Exporting LOD 0 models from {self.item.asset.name}.{self.item.asset.fileExtension} to DMF"
-	
-	def save(self, output:str):
-		asset:GameResourcePack = self.item.asset
-		output = self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXPORT_FOLDER), asset.name)
-		self.setTerminable(asset)
-
-		packedFiles = asset.getPackedFiles()
-		fileCnt = 0
-
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
-
-		for v in packedFiles:
-			if isinstance(v, RendInst):
-				fileCnt += 1
-
-		k = 0
-
-		for v in packedFiles:
-			if isinstance(v, RendInst):
-				if self.handleTermination(v):
-					break
-				k += 1
-
-				self.setTaskStatus(f"Exporting {v.getExportName(0)}.dmf... ({k}/{fileCnt})")
-
-				level = log.curLevel
-
-				log.log(f"Exporting {v.getExportName(0)}.dmf... ({k}/{fileCnt})")
-				log.addLevel()
-				
-
-				try:
-					self.setTerminable(v)
-					mdl = v.getModel(0)
-					self.setTerminable(mdl)
-					mdl.exportDmf(output, exportTex, forceConvert)
-
-					log.subLevel()
-				except Exception as e:
-					print(format_exc())
-
-					self.setErrored()
-
-					log.subLevel(log.curLevel - level)
-
-				self.setTaskProgress(k / fileCnt)
-		
-		self.clearTerminable()
+		return f"Exporting LOD 0 models from {self.item.asset.name}.{self.item.asset.fileExtension} to {self.exportFormat.upper()}"
 
 
-class ExportToOBJ(SaveAction):
-	def __init__(self, parent, item: SimpleItem, lod:int):
-		self.lod = lod
-
-		super().__init__(parent, item)
-	
-	item:AssetItem
-
+class ExportToDMF(ExportModel):
+	@classmethod
 	@property
-	def actionText(self) -> str:
-		return f"Export LOD {self.lod} to OBJ"
+	def exportMethodName(cls) -> str:
+		return "exportDmf"
+
+	@classmethod
+	@property
+	def exportFormat(cls) -> str:
+		return "dmf"
+	
+
+class ExportSkeletonToDMF(ExportToDMF):
+	@property
+	def actionText(self):
+		return f"Export skeleton to {self.item.asset.name}.dmf"
 	
 	@property
 	def taskTitle(self) -> str:
-		return f"Exporting LOD to {self.item.asset.getExportName(self.lod)}.obj"
+		return f"Exporting skeleton to {self.item.asset.name}.{self.exportFormat}"
 
-	def save(self, output:str):
-		asset:RendInst = self.item.asset
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
-	
-		self.setTerminable(asset)
-		mdl = asset.getModel(self.lod)
-		self.setTerminable(mdl)
-		mdl.exportObj(output, exportTex, forceConvert)
+class ExportLODsToDMF(ExportToDMF, ExportLODs):
+	def __init__(self, *args, **kwargs):
+		super(ExportLODs, self).__init__(*args, **kwargs)
 
-		self.clearTerminable()
-		
+class ExportAllToDMF(ExportToDMF, ExportAllModels):
+	def __init__(self, *args, **kwargs):
+		super(ExportAllModels, self).__init__(*args, **kwargs)
 
-		self.setTaskProgress(1)
-
-class ExportLODsToOBJ(SaveAction):
-	item:AssetItem
-
+class ExportToOBJ(ExportModel):
+	@classmethod
 	@property
-	def actionText(self) -> str:
-		return "Export all LODs to OBJ"
-	
+	def exportMethodName(cls) -> str:
+		return "exportObj"
+
+	@classmethod
 	@property
-	def taskTitle(self) -> str:
-		return f"Exporting all LODs from {self.item.asset.name} to OBJ"
+	def exportFormat(cls) -> str:
+		return "obj"
 
-	def save(self, output:str):
-		asset:RendInst = self.item.asset
-		self.setTerminable(asset)
-		asset.computeData()
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
+class ExportLODsToOBJ(ExportToOBJ, ExportLODs):
+	def __init__(self, *args, **kwargs):
+		super(ExportLODs, self).__init__(*args, **kwargs)
 
-		for i in range(asset.lodCount):
-			if self.handleTermination(asset):
-				break
-			
-			self.setTerminable(asset)
-			mdl = asset.getModel(i)
-			self.setTerminable(mdl)
-			mdl.exportObj(output, exportTex, forceConvert)
+class ExportAllToOBJ(ExportToOBJ, ExportAllModels):
+	def __init__(self, *args, **kwargs):
+		super(ExportAllModels, self).__init__(*args, **kwargs)
 
-
-			self.setTaskProgress((i + 1) / asset.lodCount)
-		
-		self.clearTerminable()
-
-class ExportAllToOBJ(SaveAction):
-	item:AssetItem
-
-	@property
-	def actionText(self) -> str:
-		return "Export all models to LOD 0 OBJ"
-	
-	@property
-	def taskTitle(self) -> str:
-		return f"Exporting LOD 0 models from {self.item.asset.name}.{self.item.asset.fileExtension} to OBJ"
-	
-	def save(self, output:str):
-		asset:GameResourcePack = self.item.asset
-		output = self.makeOutputFolder(SETTINGS.getValue(SETTINGS_EXPORT_FOLDER), asset.name)
-		self.setTerminable(asset)
-
-		packedFiles = asset.getPackedFiles()
-		fileCnt = 0
-
-		exportTex = not SETTINGS.getValue(SETTINGS_NO_TEX_EXPORT)
-		forceConvert = SETTINGS.getValue(SETTINGS_FORCE_DDS_CONVERSION)
-
-		for v in packedFiles:
-			if isinstance(v, RendInst):
-				fileCnt += 1
-
-		k = 0
-
-		for v in packedFiles:
-			if isinstance(v, RendInst):
-				if self.handleTermination(v):
-					break
-				k += 1
-
-				self.setTaskStatus(f"Exporting {v.getExportName(0)}.obj... ({k}/{fileCnt})")
-
-				level = log.curLevel
-
-				log.log(f"Exporting {v.getExportName(0)}.obj... ({k}/{fileCnt})")
-				log.addLevel()
-				
-
-				try:
-					self.setTerminable(v)
-					mdl = v.getModel(0)
-					self.setTerminable(mdl)
-					mdl.exportObj(output, exportTex, forceConvert)
-
-					log.subLevel()
-				except Exception as e:
-					print(format_exc())
-
-					self.setErrored()
-
-					log.subLevel(log.curLevel - level)
-
-				self.setTaskProgress(k / fileCnt)
-		
-		self.clearTerminable()
 
 
 class FileSizeSortProxyModel(QSortFilterProxyModel):

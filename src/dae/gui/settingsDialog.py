@@ -4,7 +4,7 @@ from os import path
 
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
-from PyQt5.QtWidgets import QDialog, QWidget, QGridLayout, QCheckBox, QLineEdit, QPushButton, QFileDialog, QVBoxLayout
+from PyQt5.QtWidgets import QDialog, QWidget, QCheckBox, QLineEdit, QPushButton, QFileDialog, QVBoxLayout
 from PyQt5.uic import loadUi
 from util.misc import getUIPath, openFile
 from util.enums import *
@@ -17,7 +17,7 @@ class SettingsDialog(QDialog):
 	vLayout:QVBoxLayout
 
 	exportFolder:QCheckBox
-	exportPreviewTex:QCheckBox
+	expandAll:QCheckBox
 	extractFolder:QCheckBox
 	noTexExport:QCheckBox
 	outputFolder:QCheckBox
@@ -46,7 +46,7 @@ class SettingsDialog(QDialog):
 
 		self.setupCheckBox(self.exportFolder, SETTINGS_EXPORT_FOLDER)
 		self.setupCheckBox(self.convertTex, SETTINGS_FORCE_DDS_CONVERSION)
-		self.setupCheckBox(self.exportPreviewTex, SETTINGS_EXPORT_PREVIEW_TEX)
+		self.setupCheckBox(self.expandAll, SETTINGS_EXPAND_ALL)
 		self.setupCheckBox(self.extractFolder, SETTINGS_EXTRACT_FOLDER)
 		self.setupCheckBox(self.noTexExport, SETTINGS_NO_TEX_EXPORT)
 		self.setupCheckBox(self.outputFolder, SETTINGS_OUTPUT_FOLDER)
