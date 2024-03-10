@@ -22,7 +22,14 @@ DAE was designed to fulfil a few purposes:
 
 ## Features
 
-TBD
+- Export models with bones to OBJ / DMF / Source engine
+- Streamline model export directly to the Source engine
+ - Dagor normal map format to Source normal map format conversion
+ - Automatic conversion to VTF
+ - Dagor shader parameters to VMT translation
+ - QC generation with LOD support
+ - Automatic split of submodels that exceed 11K vertices
+ 
 
 ## How to use:
 
@@ -76,8 +83,13 @@ Models can be exported to OBJ without skeleton. An MTL file is automaticaly gene
 1) Look in the issues if someone did not already report a similar issue
 2) Make an issue, give me the full logs and the path to the resource you tried to export
 
-## Compiling the GUI yourself
+## Compiling the GUI
 
 ```ps
 PS C:\DagorAssetExplorer\src\dae> pyinstaller -p "./gui;./util;./parse" -F __main__.py -n DagorAssetExplorer
+```
+## Compiling dae_intrinsics
+
+```ps
+PS C:\DagorAssetExplorer\src\intrinsics> gcc -shared -Wall .\dae_intrinsics.c -o ..\bin\dae_intrinsics.dll
 ```
