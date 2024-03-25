@@ -89,13 +89,14 @@ Models can be exported to OBJ without skeleton. An MTL file is automaticaly gene
 PS C:\DagorAssetExplorer\src\dae> pyinstaller -p "./gui;./util;./parse" -F __main__.py -n DagorAssetExplorer
 ```
 
-## Credits
-
-Quentin H.
-CloakerSmoker
-
 ## Compiling dae_intrinsics
 
 ```ps
 PS C:\DagorAssetExplorer\src\intrinsics> gcc -shared -Wall .\dae_intrinsics.c -o ..\bin\dae_intrinsics.dll
 ```
+
+
+## Credits
+
+- Quentin H.
+- CloakerSmoker
